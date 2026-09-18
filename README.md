@@ -1,0 +1,244 @@
+# Dimension Camera
+
+维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.2**：
+硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV 保存和自动测试已经建立；
+本轮增加了单位隔离、能力/标定模型、真实运动 safety gate、dry-run 和只读接入 SOP。
+GUI 将在核心硬件行为进一步确认后再进入。
+
+## 先说安全边界
+
+- 默认入口只运行 Mock，不会连接或移动真实设备。
+- `DimensionStage.connect()` 只调用 `GA_OpenByIP`，不会 Reset、清零、使能或移动。
+- 真实 Adapter 的上层坐标始终是 mm；原始 pulse 只能通过明确命名的只读方法获取。
+- `StageCapabilities` 的未知能力为 `None`，`AxisCalibration` 的未知标定也为 `None`。
+- 真实运动必须显式设置 `allow_motion=True`，且完整通过能力、标定、范围和健康状态安全门。
+- 当前厂商示例只确认了轴 1 使用 `GA_Update(1)`，所以真实运动暂时只允许轴 1。
+- Stop、Home、硬件/软件限位的厂家函数签名尚无可靠资料，Adapter 不会猜测调用。
+- 当前默认配置即使人为设置 `allow_motion=True`，仍会因状态 bit、健康状态、pulse/mm、行程等未知而拒绝运动。
+
+完整证据状态见 [Dimension Stage Evidence Matrix](docs/DIMENSION_STAGE_EVIDENCE.md)，
+第一次接线步骤见 [First Hardware Bring-up SOP](docs/FIRST_HARDWARE_BRINGUP.md)。
+
+## 当前环境检查（2026-09-16）
+
+工作区根目录原先只有 `positioner/`。其中有四组 GAS.dll 厂家示例及四个旧 `venv`：
+
+- 系统命令 `python` 指向 Microsoft Store 占位符，不能运行；
+- 旧 `venv` 固定引用 `D:\Program Files\Python38\python.exe`，该解释器已经不存在；
+- Codex bundled Python 3.12.14 可运行；
+- bundled Python 中已有 `numpy`，起初没有 `pypylon`、`tifffile`、`PySide6`、`pyqtgraph`、`pytest`；
+- `GAS.dll` 能被当前 64-bit Python 加载；没有连接真实控制器，也没有执行运动。
+
+本轮随后已在 `dimension_camera/.venv` 独立安装 `numpy`、`tifffile`、`pypylon` 和 `pytest`。
+用 pypylon 做了只读设备枚举，当前返回空列表（0 台在线相机）；没有打开相机。
+
+建议为本项目建立独立环境，不要复用厂家示例中已经失效的 venv。
+
+```powershell
+cd C:\slm_3d\dimension_camera
+C:\path\to\python.exe -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
+GUI 开发阶段再安装：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-gui.txt
+```
+
+## 已确认的位移台控制方式
+
+现有代码不是 Python package，而是 Python `ctypes.CDLL` 直接加载 `GAS.dll`。厂家示例的连接参数为：
+
+```text
+控制器 IP：192.168.0.200
+主机 IP：  192.168.0.1
+轴：       1
+位置单位： pulse（脉冲）
+```
+
+这些只是厂家示例值，不代表现场设备已经确认。程序不会把它们写入 `AxisCalibration`。
+
+V0.2 明确分离三层坐标：
+
+```text
+ScanPlan / StageBase: physical coordinate, mm
+AxisCalibration:      mm <-> pulse/count conversion
+GAS.dll:              controller coordinate, pulse/count
+```
+
+不知道 pulse/mm 时，Phase A 仍可调用 `get_position_pulse()` 读取原值，但 `get_position()`
+不会把 pulse 冒充成 mm，而会因标定不完整明确报错。
+
+### 从现有示例确认的 API
+
+| 能力 | 厂家 API | 证据与当前处理 |
+|---|---|---|
+| 连接 | `GA_OpenByIP(controller_ip, host_ip, 0, 0)` | 示例实际调用；返回 0 成功 |
+| 断开 | `GA_Close()` | 示例实际调用 |
+| 轴选择 | 每个轴 API 的第一个参数，如 `GA_GetPrfPos(1, ...)` | 示例确认轴号 1；文档注释写轴范围 1..8 |
+| 读规划位置 | `GA_GetPrfPos(axis, double*, 1, 0)` | 示例说明单位 pulse |
+| 绝对目标 | `GA_SetPos(axis, c_int64(target))` | 示例确认，随后需 `GA_Update(1)` 启动轴 1 |
+| 点位速度 | `GA_SetVel(axis, c_double(value))` | 示例说明为 pulse/ms |
+| 点位模式 | `GA_PrfTrap(axis)` | 示例实际调用 |
+| 点位参数 | `GA_SetTrapPrmSingle(axis, acc, dec, smooth, 0)` | 示例实际调用 |
+| 使能 | `GA_AxisOn(axis)` | 示例实际调用 |
+| 状态原值 | `GA_GetSts(axis, long*, 1, 0)` | 示例只打印原值，没有状态位定义，因此未用于判断运动完成 |
+| 复位 | `GA_Reset()` | 示例存在，但连接时调用可能改变设备状态，本项目不自动调用 |
+| 关闭编码器 | `GA_EncOff(axis)` | 示例存在，本项目不自动改变反馈模式 |
+| 位置清零 | `GA_ZeroPos(axis, 1)` | 示例存在，本项目不自动清零 |
+
+`GA_GetSts` 的调用形式已见于厂家示例，因此只读 CLI 可以打印 raw decimal/hex；其 bit
+含义仍为 unknown，程序不会解释。`GA_GetPrfPos` 读到的是 **规划位置**，并不等价于
+编码器实际位置。默认 safety gate 因而禁止真实运动。
+
+### StageCapabilities 与 AxisCalibration
+
+`hardware/stage_safety.py` 集中保存安全事实：
+
+- `StageCapabilities` 使用 `True / False / None` 表示 confirmed / unsupported / unknown；
+- `AxisCalibration` 保存 axis、pulse/mm、行程、方向、零点和可选软限位；
+- mm/pulse 转换只能在 `pulses_per_mm`、方向和零点全部已知时执行；
+- 真实运动还要求状态位解释和健康 raw status 白名单有官方依据；
+- Stop、Home、正负限位能力未知时直接抛出 unsupported，不做 DLL 试错。
+
+### 尚未确认，禁止在真实设备上猜测
+
+- 设备枚举：示例只有固定 IP 连接，没有枚举 API；
+- pulse/mm 标定、真实运动方向、机械行程；
+- `GA_GetSts` 各 bit 的含义和“运动完成”判据；
+- 编码器实际位置读取方式；
+- `GA_Stop` 的参数、急停/减速停模式；
+- Home/回零流程；
+- 正负限位输入和软件限位函数的准确签名；
+- 轴 2..8 对应的 `GA_Update` 掩码。
+
+拿到控制器型号和官方 API 手册后，应优先补齐这些项目。
+
+## Basler 相机控制方式
+
+`hardware/basler_camera.py` 使用官方 `pypylon`，并采用延迟导入：没有 Basler 环境时，
+Mock 测试仍能运行。相机身份始终使用序列号，不使用 Camera 0/1 枚举下标。
+
+已封装：枚举、按序列号连接/断开、型号/序列号、曝光读写、单帧抓取、开始/停止连续抓取。
+`grab_image()` 在释放 pypylon grab result 前复制 numpy 数组，以免底层缓冲区复用后图像被改写。
+
+尚未在本机验证真实采图：项目 `.venv` 已安装 pypylon，但枚举结果为 0 台在线相机。
+像素格式、Gain、触发模式暂未主动改变，
+所以保存的是相机当前配置产生的原始数组。
+
+## 目录结构与数据流
+
+```text
+main.py (当前为 Mock CLI；未来 GUI)
+  -> ScanController
+      -> StageBase / DimensionStage / MockStage
+      -> CameraBase / BaslerCamera / MockCamera
+      -> ScanDataManager
+          -> uint8/uint16 原始 TIFF
+          -> scan_config.json
+          -> scan_log.csv
+```
+
+GUI 将来只能通过 `ScanController` 控制硬件。同步的 `controller.run(plan)` 必须放入
+PySide6 `QThread` worker，不能在 GUI 主线程直接执行。
+
+## 立即运行 Mock 完整闭环
+
+安装核心依赖后：
+
+```powershell
+cd C:\slm_3d\dimension_camera
+.\.venv\Scripts\python.exe main.py --mock-demo --output output
+```
+
+它会运行三个位置：移动、轮询到位、稳定等待、生成 uint16 Gaussian 光斑、保存 TIFF、
+写 JSON 和 CSV。输出类似：
+
+```text
+output/20260916_143210_mock_demo/
+  scan_config.json
+  scan_log.csv
+  Camera_MOCK-001/
+    pos_000001_target_0.000000_actual_0.000000_repeat_001_frame_001.tif
+    ...
+```
+
+## 只读验证真实位移台
+
+只有人工确认电脑网卡 IP、控制器 IP、轴号后，才运行唯一的 Phase A 入口：
+
+```powershell
+cd C:\slm_3d\dimension_camera
+$dllPath = Read-Host "Enter the VERIFIED GAS.dll path"
+$controllerIp = Read-Host "Enter the VERIFIED controller IP"
+$hostIp = Read-Host "Enter the VERIFIED PC adapter IP"
+$axisId = [int](Read-Host "Enter the VERIFIED axis number")
+.\.venv\Scripts\python.exe scripts\verify_stage_readonly.py `
+  --dll $dllPath `
+  --controller-ip $controllerIp `
+  --host-ip $hostIp `
+  --axis $axisId `
+  --confirm-read-only
+```
+
+脚本流程只有 `DLL load -> connect -> GA_GetPrfPos -> GA_GetSts raw -> disconnect`。
+它不会解释状态位，也不包含 Reset、Zero、Enable、Home、Move、Stop 或限位测试。本轮没有
+执行它，因为网络、设备身份和轴配置尚未现场确认。操作前完整阅读
+[FIRST_HARDWARE_BRINGUP.md](docs/FIRST_HARDWARE_BRINGUP.md)。
+
+## 完全离线的 scan dry-run
+
+以下命令只检查数据，不加载 GAS.dll、不连接设备、不创建扫描目录：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\inspect_scan_plan.py `
+  --positions-mm 0,0.1,0.2,0.2 `
+  --camera-count 2 --frames 3 --repeats 1 `
+  --image-height 2048 --image-width 2448 --dtype uint16 `
+  --travel-min-mm 0 --travel-max-mm 10
+```
+
+输出包含扫描点数、首末/最小/最大位置、步长集合、重复位置、总图片数、原始像素数据的
+预计存储量、配置行程检查和 real-motion 开关状态。存储估算不包含 TIFF header/metadata，
+因此是近似的原始 payload 大小。
+
+## ScanPlan 教学示例
+
+```python
+from pathlib import Path
+from scan.scan_plan import CameraSettings, ScanPlan
+
+plan = ScanPlan.from_range(
+    start="0.0",
+    stop="1.0",
+    step="0.1",
+    cameras=[CameraSettings("12345678", exposure_us=500.0)],
+    save_root=Path("output"),
+    frames_per_position=2,
+    repeats=1,
+)
+```
+
+为什么用字符串和 `Decimal` 生成 Range？二进制浮点数不能精确表示很多十进制小数，
+直接反复加 `0.1` 可能出现 `0.30000000000000004`。内部最终仍统一为 `list[float]`，
+但边界生成是可预测的。
+
+## 测试
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+当前测试覆盖 Range/List 配置、多维图片总数、Mock 位移与停止、Mock uint16 光斑、两相机
+完整扫描、TIFF/JSON/CSV、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
+dry-run 位置/存储/行程检查。当前结果：`20 passed`。
+
+## 下一步（进入真实运动或 GUI 前）
+
+1. 按 SOP 执行 Phase A 只读 bring-up，保存 raw position/status 和设备铭牌信息；
+2. 提供匹配版本的 GAS `.h`、SDK/API manual、官方 sample project、controller manual；
+3. 提供 stage manual，确认 pulse/mm、方向、行程、零点、限位与急停方案；
+4. 根据官方状态位和编码器 API 完善健康检查与 `wait_until_idle`；
+5. 另行评审 Phase B 最小运动方案；本版本不能通过只改 `allow_motion` 绕过安全门；
+6. 核心硬件闭环验证后，再建立 PySide6 + pyqtgraph GUI 和 QThread worker。
