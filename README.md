@@ -214,6 +214,16 @@ cd C:\slm_3d\dimension_camera
   --confirm-current-capture
 ```
 
+如果此时只想验证相机、暂不连接位移台，则使用相机单帧模式。例如列表中的 CXP 相机是 `[3]`：
+
+```powershell
+.\.venv\Scripts\python.exe main.py --capture-camera `
+  --camera-index 3 `
+  --confirm-camera-capture
+```
+
+该模式只连接选中的相机、抓取一帧后断开，不访问位移台。
+
 该模式的位移台调用严格为 `GA_OpenByIP -> GA_GetPrfPos -> GA_GetSts -> GA_Close`；没有
 Reset、清零、使能、Home、Stop 或 Move。相机保持现有配置，只执行一帧抓取，不修改曝光、
 像素格式或触发设置。

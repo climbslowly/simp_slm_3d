@@ -133,6 +133,52 @@ def capture_current_position(
     return session_dir, image_path, numpy_path, metadata
 
 
+def capture_single_camera(
+    *, output: Path, camera_device: BaslerDeviceInfo
+) -> tuple[Path, Path, Path, dict[str, object]]:
+    """按枚举序号对应的稳定序列号采集一帧；不访问位移台。"""
+    camera = BaslerCamera(camera_device.serial_number)
+    try:
+        camera.connect()
+        image = camera.grab_image()
+        camera_model = camera.get_model_name()
+        exposure_us = camera.get_exposure_us()
+    finally:
+        camera.disconnect()
+
+    output.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_dir = output / f"{timestamp}_camera_single_capture"
+    suffix = 1
+    while session_dir.exists():
+        session_dir = output / f"{timestamp}_camera_single_capture_{suffix:03d}"
+        suffix += 1
+    session_dir.mkdir()
+    safe_serial = re.sub(r"[^A-Za-z0-9_-]", "_", camera_device.serial_number)
+    stem = f"Camera_{safe_serial}_single_frame"
+    image_path = session_dir / f"{stem}.tiff"
+    numpy_path = session_dir / f"{stem}.npy"
+    tifffile.imwrite(image_path, image)
+    np.save(numpy_path, image, allow_pickle=False)
+    metadata: dict[str, object] = {
+        "capture_time_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "operation": "camera_single_frame_capture",
+        "stage": None,
+        "camera": {
+            **camera_device.to_dict(),
+            "model_name": camera_model,
+            "exposure_us": exposure_us,
+            "image_shape": list(image.shape),
+            "image_dtype": str(image.dtype),
+        },
+        "files": {"tiff": image_path.name, "numpy": numpy_path.name},
+    }
+    (session_dir / "capture_metadata.json").write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return session_dir, image_path, numpy_path, metadata
+
+
 def print_basler_camera_list() -> list[BaslerDeviceInfo]:
     """枚举并打印全部 pylon 可见设备，列表序号从 0 开始。"""
     devices = enumerate_basler_cameras()
@@ -165,6 +211,11 @@ def main() -> None:
         help="只读真实位移台当前位置，并让指定 Basler 相机采集一帧；不移动位移台",
     )
     modes.add_argument(
+        "--capture-camera",
+        action="store_true",
+        help="让指定 Basler 相机采集一帧；不连接或移动位移台",
+    )
+    modes.add_argument(
         "--list-cameras",
         action="store_true",
         help="列出 pylon 当前可见的全部 USB/GigE/CXP 相机",
@@ -188,6 +239,11 @@ def main() -> None:
         action="store_true",
         help="确认只执行位移台 connect/read/disconnect 与相机单帧采集",
     )
+    parser.add_argument(
+        "--confirm-camera-capture",
+        action="store_true",
+        help="确认只连接指定相机、采集一帧并断开",
+    )
     args = parser.parse_args()
     if args.list_cameras:
         print_basler_camera_list()
@@ -195,6 +251,21 @@ def main() -> None:
     if args.mock_demo:
         result = run_mock_demo(args.output or Path("output"))
         print(f"扫描完成：{result.resolve()}")
+        return
+
+    if args.capture_camera:
+        if args.camera_index is None:
+            parser.error("--capture-camera 缺少参数：--camera-index")
+        if not args.confirm_camera_capture:
+            parser.error("必须显式提供 --confirm-camera-capture")
+        camera_device = select_basler_camera(args.camera_index)
+        session_dir, image_path, numpy_path, _metadata = capture_single_camera(
+            output=args.output or Path("data/captures"),
+            camera_device=camera_device,
+        )
+        print(f"单帧 TIFF = {image_path.resolve()}")
+        print(f"NumPy 数组 = {numpy_path.resolve()}")
+        print(f"采集 metadata = {(session_dir / 'capture_metadata.json').resolve()}")
         return
 
     required = {
