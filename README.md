@@ -1,9 +1,10 @@
 # Dimension Camera
 
-维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.2**：
+维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.2 + GUI-M1**：
 硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV 保存和自动测试已经建立；
 本轮增加了单位隔离、能力/标定模型、真实运动 safety gate、dry-run 和只读接入 SOP。
-GUI 将在核心硬件行为进一步确认后再进入。
+现已增加 **GUI-M1**：PySide6 + pyqtgraph 的离线 Mock 空间扫描、原始 TIFF 保存、联动浏览、
+暂停/继续/停止和历史目录回读。真实硬件行为仍保持原安全边界，GUI-M1 不加载或连接真实设备。
 
 ## 先说安全边界
 
@@ -145,8 +146,9 @@ main.py (当前为 Mock CLI；未来 GUI)
           -> scan_log.csv
 ```
 
-GUI 将来只能通过 `ScanController` 控制硬件。同步的 `controller.run(plan)` 必须放入
-PySide6 `QThread` worker，不能在 GUI 主线程直接执行。
+GUI 通过与 Qt 无关的扫描控制器访问设备：既有单轴流程使用 `ScanController`，GUI-M1
+空间 Mock 流程使用 `SpatialScanController`。同步的 `controller.run(plan)` 放在 PySide6
+`QThread` worker 中，GUI 主线程只处理输入和显示。
 
 ## 立即运行 Mock 完整闭环
 
@@ -168,6 +170,24 @@ output/20260916_143210_mock_demo/
     pos_000001_target_0.000000_actual_0.000000_repeat_001_frame_001.tif
     ...
 ```
+
+## 运行 GUI-M1（仅 Mock）
+
+```powershell
+cd C:\slm_3d\dimension_camera
+.\.venv\Scripts\python.exe -m pip install -r requirements-gui.txt
+.\.venv\Scripts\python.exe -m gui.app
+```
+
+重新打开已有 GUI-M1 扫描目录：
+
+```powershell
+.\.venv\Scripts\python.exe -m gui.app --open "output\gui_m1\<scan_directory>"
+```
+
+GUI-M1 的二维 raster 约定为 `heatmap[row, col] = [纵轴, 横轴]`，图像变换把像素中心对齐到
+计划坐标。主图的零值、未采集 `NaN` 和错误日志互不混淆；选点只浏览数据，不提交移动。
+完整人工验收步骤见 [GUI_M1_ACCEPTANCE.md](GUI_M1_ACCEPTANCE.md)。
 
 ## 只读验证真实位移台
 
@@ -292,13 +312,14 @@ plan = ScanPlan.from_range(
 
 当前测试覆盖 Range/List 配置、多维图片总数、Mock 位移与停止、Mock uint16 光斑、两相机
 完整扫描、TIFF/JSON/CSV、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
-dry-run 位置/存储/行程检查。当前结果：`20 passed`。
+dry-run 位置/存储/行程检查，以及 GUI-M1 空间计划、保存回读、取消语义和离屏 Qt 构造。
+当前结果：`37 passed`。
 
-## 下一步（进入真实运动或 GUI 前）
+## 下一步（进入真实硬件 GUI 前）
 
 1. 按 SOP 执行 Phase A 只读 bring-up，保存 raw position/status 和设备铭牌信息；
 2. 提供匹配版本的 GAS `.h`、SDK/API manual、官方 sample project、controller manual；
 3. 提供 stage manual，确认 pulse/mm、方向、行程、零点、限位与急停方案；
 4. 根据官方状态位和编码器 API 完善健康检查与 `wait_until_idle`；
 5. 另行评审 Phase B 最小运动方案；本版本不能通过只改 `allow_motion` 绕过安全门；
-6. 核心硬件闭环验证后，再建立 PySide6 + pyqtgraph GUI 和 QThread worker。
+6. 核心硬件闭环验证后，在现有 GUI-M1 上进入 GUI-M2 真实相机接入；真实位移仍保持禁用。

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "device_mode": "MOCK",
+  "exposure_ms": 1.0,
+  "manual_step_mm": 0.1,
+  "scan_type": "XY",
+  "horizontal_start": -0.4,
+  "horizontal_stop": 0.4,
+  "horizontal_step": 0.2,
+  "vertical_start": -0.2,
+  "vertical_stop": 0.2,
+  "vertical_step": 0.2,
+  "fixed_value_mm": 0.0,
+  "settling_ms": 1.0,
+  "roi_xywh": [
+    80,
+    64,
+    160,
+    128
+  ],
+  "metric": "mean",
+  "output_dir": "output/gui_m1",
+  "colormap": "viridis"
+}
