@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,28 @@ class BaslerCameraError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class BaslerDeviceInfo:
+    """pylon 统一枚举返回的一台相机。
+
+    ``transport_layer_type`` 可用于区分 USB、GigE 和通过 GenTL 暴露的 CXP
+    设备。这里的 ``index`` 只供本次命令行选择，真正连接仍使用稳定的序列号。
+    """
+
+    index: int
+    serial_number: str
+    model_name: str
+    vendor_name: str
+    transport_layer_type: str
+    device_class: str
+    interface_id: str
+    friendly_name: str
+    full_name: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
 def _load_pylon() -> Any:
     try:
         from pypylon import pylon
@@ -21,6 +44,63 @@ def _load_pylon() -> Any:
             "未安装 pypylon。请在项目环境运行：pip install pypylon"
         ) from exc
     return pylon
+
+
+def _device_text(device: Any, getter_name: str) -> str:
+    """兼容不同 pylon transport layer 可能缺失的设备信息字段。"""
+    getter = getattr(device, getter_name, None)
+    if getter is None:
+        return ""
+    try:
+        value = getter()
+    except Exception:
+        return ""
+    return "" if value is None else str(value)
+
+
+def enumerate_basler_cameras() -> list[BaslerDeviceInfo]:
+    """枚举 pylon 当前可见的全部设备，不限定 USB/GigE/CXP 接口。
+
+    pylon 的 ``TlFactory.EnumerateDevices()`` 会查询所有已经安装并注册的 transport
+    layer。CXP 相机能否出现取决于对应采集卡、驱动和 GenTL producer 是否已安装。
+    """
+    pylon = _load_pylon()
+    factory = pylon.TlFactory.GetInstance()
+    devices: list[BaslerDeviceInfo] = []
+    for index, device in enumerate(factory.EnumerateDevices()):
+        devices.append(
+            BaslerDeviceInfo(
+                index=index,
+                serial_number=_device_text(device, "GetSerialNumber"),
+                model_name=_device_text(device, "GetModelName"),
+                vendor_name=_device_text(device, "GetVendorName"),
+                transport_layer_type=_device_text(device, "GetTLType"),
+                device_class=_device_text(device, "GetDeviceClass"),
+                interface_id=_device_text(device, "GetInterfaceID"),
+                friendly_name=_device_text(device, "GetFriendlyName"),
+                full_name=_device_text(device, "GetFullName"),
+            )
+        )
+    return devices
+
+
+def select_basler_camera(index: int) -> BaslerDeviceInfo:
+    """按刚刚显示的零起始序号选择相机，并验证其序列号可用于稳定连接。"""
+    devices = enumerate_basler_cameras()
+    if not devices:
+        raise BaslerCameraError(
+            "未发现任何 pylon 相机；请检查相机供电、线缆、采集卡、pylon 驱动和 GenTL transport layer"
+        )
+    if index < 0 or index >= len(devices):
+        raise BaslerCameraError(
+            f"相机序号 {index} 超出范围；当前有效范围为 0..{len(devices) - 1}"
+        )
+    selected = devices[index]
+    if not selected.serial_number:
+        raise BaslerCameraError(
+            f"序号 {index} 的设备没有报告序列号，当前安全连接方式无法唯一绑定该设备"
+        )
+    return selected
 
 
 class BaslerCamera(CameraBase):
@@ -115,4 +195,3 @@ class BaslerCamera(CameraBase):
         camera = self._require_camera()
         if camera.IsGrabbing():
             camera.StopGrabbing()
-

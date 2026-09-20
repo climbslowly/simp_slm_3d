@@ -187,6 +187,49 @@ $axisId = [int](Read-Host "Enter the VERIFIED axis number")
 执行它，因为网络、设备身份和轴配置尚未现场确认。操作前完整阅读
 [FIRST_HARDWARE_BRINGUP.md](docs/FIRST_HARDWARE_BRINGUP.md)。
 
+## 当前位移台位置 + 单帧相机采集（不扫描、不移动）
+
+先列出 pylon 当前通过所有已安装 transport layer 找到的相机：
+
+```powershell
+cd C:\slm_3d\dimension_camera
+.\.venv\Scripts\python.exe main.py --list-cameras
+```
+
+列表同时显示序号、型号、序列号、transport layer 和 interface ID。统一枚举不限定 USB；
+安装了匹配的采集卡驱动和 GenTL producer 后，CXP 相机也会出现在列表中。若 CXP 相机没有
+出现，需要先检查相机供电、CXP 线缆、采集卡驱动以及 pylon/GenTL transport layer。
+
+记下列表开头的相机序号（从 0 开始）。在已确认控制器 IP、电脑网卡 IP、轴号和 GAS.dll
+路径后，按序号选择相机，执行一次当前位置记录和单帧采集：
+
+```powershell
+cd C:\slm_3d\dimension_camera
+.\.venv\Scripts\python.exe main.py --capture-current `
+  --stage-dll "C:\slm_3d\positioner\GAS.dll" `
+  --controller-ip "<confirmed-controller-ip>" `
+  --host-ip "<confirmed-pc-adapter-ip>" `
+  --axis <confirmed-axis-id> `
+  --camera-index <camera-list-index> `
+  --confirm-current-capture
+```
+
+该模式的位移台调用严格为 `GA_OpenByIP -> GA_GetPrfPos -> GA_GetSts -> GA_Close`；没有
+Reset、清零、使能、Home、Stop 或 Move。相机保持现有配置，只执行一帧抓取，不修改曝光、
+像素格式或触发设置。
+
+结果默认保存在 `data/captures/<timestamp>_current_capture/`，该输出子目录已在 `.gitignore`
+中排除，不会上传到 GitHub。项目原有的 `data/` Python 源码包仍正常同步：
+
+- `Camera_<serial>_current_raw_pulse_<value>.tiff`：原始单帧 TIFF；
+- `Camera_<serial>_current_raw_pulse_<value>.npy`：NumPy 原生数组，可用
+  `numpy.load(path, allow_pickle=False)` 快速读取；
+- `capture_metadata.json`：原始规划位置、raw status、相机型号/序列号、当前曝光、图像尺寸和数据类型。
+
+注意：`GA_GetPrfPos` 已确认的单位是 `pulse/count`，且语义是**规划位置**，不是已验证的编码器
+实际位置。没有完成 pulse/mm 标定前，程序不会显示或写入虚假的 mm 位置；`raw_status` 的 bit
+含义也仍会标记为 `UNKNOWN`。
+
 ## 完全离线的 scan dry-run
 
 以下命令只检查数据，不加载 GAS.dll、不连接设备、不创建扫描目录：

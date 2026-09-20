@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .idea/
 output/
+# data/ 是源码包，只忽略其中的真实相机采集结果。
+data/captures/
 RunTimeLog/
 *.log
-
