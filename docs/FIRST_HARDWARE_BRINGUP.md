@@ -8,15 +8,16 @@
 2. 确认运动区域无障碍物、光学件不会因意外运动碰撞。
 3. 找到物理急停或断电手段，并确保操作者能够立即触及。
 4. 确认网线、供电、保护地和限位接线符合厂家手册。
-5. 从 Windows 网络配置读取本机网卡 IP；不要直接沿用示例 `192.168.0.1`。
-6. 从控制器配置/手册确认控制器 IP 和目标轴号。
+5. 从 Windows 网络配置读取本机专用网卡 IP。随附官方配置为 PCIP `192.168.0.200`、
+   CardIP `192.168.0.1`，但运行前仍应现场核对。
+6. 从控制器配置/手册确认运动卡 IP 和目标轴号。
 
 ## Phase A — read-only
 
 允许动作只有：
 
 1. 加载指定 GAS.dll；
-2. 使用人工确认的 controller IP、host IP 建立连接；
+2. 使用人工确认的 PCIP、CardIP 建立连接；
 3. 记录人工确认的轴号；
 4. 调用 `GA_GetPrfPos` 读取 raw planned-position pulse；
 5. 调用 `GA_GetSts` 读取 raw status；
@@ -28,13 +29,13 @@
 ```powershell
 cd C:\slm_3d\dimension_camera
 $dllPath = Read-Host "Enter the VERIFIED GAS.dll path"
-$controllerIp = Read-Host "Enter the VERIFIED controller IP"
-$hostIp = Read-Host "Enter the VERIFIED PC adapter IP"
+$pcIp = Read-Host "Enter the VERIFIED PC adapter IP (PCIP)"
+$cardIp = Read-Host "Enter the VERIFIED motion card IP (CardIP)"
 $axisId = [int](Read-Host "Enter the VERIFIED axis number")
 .\.venv\Scripts\python.exe scripts\verify_stage_readonly.py `
   --dll $dllPath `
-  --controller-ip $controllerIp `
-  --host-ip $hostIp `
+  --pc-ip $pcIp `
+  --card-ip $cardIp `
   --axis $axisId `
   --confirm-read-only
 ```

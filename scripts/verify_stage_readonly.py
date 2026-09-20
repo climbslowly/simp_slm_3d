@@ -24,8 +24,8 @@ def main() -> None:
         description="Dimension/GAS 第一次接入只读检查；绝不调用运动 API"
     )
     parser.add_argument("--dll", required=True, type=Path)
-    parser.add_argument("--controller-ip", required=True)
-    parser.add_argument("--host-ip", required=True)
+    parser.add_argument("--pc-ip", required=True, help="实验电脑专用网卡 IP（PCIP）")
+    parser.add_argument("--card-ip", required=True, help="运动控制卡 IP（CardIP）")
     parser.add_argument("--axis", required=True, type=int)
     parser.add_argument(
         "--confirm-read-only",
@@ -38,8 +38,8 @@ def main() -> None:
     stage = DimensionStage(
         DimensionStageConfig(
             dll_path=args.dll,
-            controller_ip=args.controller_ip,
-            host_ip=args.host_ip,
+            pc_ip=args.pc_ip,
+            card_ip=args.card_ip,
             calibration=AxisCalibration(axis_id=args.axis),
             allow_motion=False,
         )
@@ -50,8 +50,8 @@ def main() -> None:
         print(f"GAS.dll loaded = {args.dll.resolve()}")
         stage.connect()
         print(f"access_level = {stage.access_level.name}")
-        print(f"controller_ip = {args.controller_ip}")
-        print(f"host_ip = {args.host_ip}")
+        print(f"pc_ip = {args.pc_ip}")
+        print(f"card_ip = {args.card_ip}")
         print(f"axis_id = {args.axis}")
         print("controller model = UNKNOWN (no confirmed query API)")
         print("firmware = UNKNOWN (no confirmed query API)")

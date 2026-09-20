@@ -85,8 +85,8 @@ def capture_current_position(
     *,
     output: Path,
     dll_path: Path,
-    controller_ip: str,
-    host_ip: str,
+    pc_ip: str,
+    card_ip: str,
     axis_id: int,
     camera_device: BaslerDeviceInfo,
 ) -> tuple[Path, Path, Path, Path, dict[str, object]]:
@@ -98,8 +98,8 @@ def capture_current_position(
     stage = DimensionStage(
         DimensionStageConfig(
             dll_path=dll_path,
-            controller_ip=controller_ip,
-            host_ip=host_ip,
+            pc_ip=pc_ip,
+            card_ip=card_ip,
             calibration=AxisCalibration(axis_id=axis_id),
             allow_motion=False,
         )
@@ -137,7 +137,8 @@ def capture_current_position(
         "capture_time_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "operation": "current_position_single_frame_capture",
         "stage": {
-            "controller_ip": controller_ip,
+            "pc_ip": pc_ip,
+            "card_ip": card_ip,
             "axis_id": axis_id,
             "position_value": position_pulse,
             "position_unit": "pulse/count",
@@ -266,8 +267,8 @@ def main() -> None:
         help="输出目录；Mock 默认 output，真实单帧默认 data/captures",
     )
     parser.add_argument("--stage-dll", type=Path, help="现场确认的 GAS.dll 路径")
-    parser.add_argument("--controller-ip", help="现场确认的控制器 IP")
-    parser.add_argument("--host-ip", help="现场确认的本机网卡 IP")
+    parser.add_argument("--pc-ip", help="实验电脑专用网卡 IP（PCIP）")
+    parser.add_argument("--card-ip", help="运动控制卡 IP（CardIP）")
     parser.add_argument("--axis", type=int, help="现场确认的轴号（1..8）")
     parser.add_argument(
         "--camera-index",
@@ -311,8 +312,8 @@ def main() -> None:
 
     required = {
         "--stage-dll": args.stage_dll,
-        "--controller-ip": args.controller_ip,
-        "--host-ip": args.host_ip,
+        "--pc-ip": args.pc_ip,
+        "--card-ip": args.card_ip,
         "--axis": args.axis,
         "--camera-index": args.camera_index,
     }
@@ -321,15 +322,15 @@ def main() -> None:
         parser.error("--capture-current 缺少参数：" + ", ".join(missing))
     if not args.confirm_current_capture:
         parser.error("必须显式提供 --confirm-current-capture")
-    assert args.stage_dll is not None and args.controller_ip is not None
-    assert args.host_ip is not None and args.axis is not None
+    assert args.stage_dll is not None and args.pc_ip is not None
+    assert args.card_ip is not None and args.axis is not None
     assert args.camera_index is not None
     camera_device = select_basler_camera(args.camera_index)
     session_dir, image_path, numpy_path, matlab_path, metadata = capture_current_position(
         output=args.output or Path("data/captures"),
         dll_path=args.stage_dll,
-        controller_ip=args.controller_ip,
-        host_ip=args.host_ip,
+        pc_ip=args.pc_ip,
+        card_ip=args.card_ip,
         axis_id=args.axis,
         camera_device=camera_device,
     )

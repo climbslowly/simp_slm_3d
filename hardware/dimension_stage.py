@@ -44,8 +44,10 @@ class DimensionStageConfig:
     """
 
     dll_path: Path
-    controller_ip: str | None = None
-    host_ip: str | None = None
+    # GAS 官方示例与随附控制软件 ComParam.xml 均表明：GA_OpenByIP 的第一个
+    # 参数是实验电脑网卡 IP（PCIP），第二个参数是运动卡 IP（CardIP）。
+    pc_ip: str | None = None
+    card_ip: str | None = None
     calibration: AxisCalibration = field(default_factory=AxisCalibration)
     capabilities: StageCapabilities = CURRENT_GAS_CAPABILITIES
     velocity_pulse_per_ms: float = 7.5
@@ -185,15 +187,15 @@ class DimensionStage(StageBase):
         """Level 1：建立只读会话；本方法不含任何运动或状态修改 API。"""
         if self._connected:
             return
-        if not self.config.controller_ip or not self.config.host_ip:
+        if not self.config.pc_ip or not self.config.card_ip:
             raise StageSafetyError(
-                "controller_ip 和 host_ip 必须由现场确认后显式配置，禁止使用示例默认值"
+                "pc_ip 和 card_ip 必须由现场确认后显式配置，禁止猜测网络参数"
             )
         self.load_library()
         assert self._dll is not None
         code = self._dll.GA_OpenByIP(
-            self.config.controller_ip.encode("ascii"),
-            self.config.host_ip.encode("ascii"),
+            self.config.pc_ip.encode("ascii"),
+            self.config.card_ip.encode("ascii"),
             0,
             0,
         )
@@ -378,7 +380,8 @@ class DimensionStage(StageBase):
         calibration = self.config.calibration
         return {
             "adapter": type(self).__name__,
-            "controller_ip": self.config.controller_ip,
+            "pc_ip": self.config.pc_ip,
+            "card_ip": self.config.card_ip,
             "axis_id": calibration.axis_id,
             "physical_unit": "mm",
             "controller_unit": "pulse",

@@ -48,16 +48,19 @@ GUI 开发阶段再安装：
 
 ## 已确认的位移台控制方式
 
-现有代码不是 Python package，而是 Python `ctypes.CDLL` 直接加载 `GAS.dll`。厂家示例的连接参数为：
+现有代码不是 Python package，而是 Python `ctypes.CDLL` 直接加载 `GAS.dll`。厂家示例与
+随附官方控制软件的连接参数为：
 
 ```text
-控制器 IP：192.168.0.200
-主机 IP：  192.168.0.1
+实验电脑网卡 PCIP：192.168.0.200
+运动控制卡 CardIP：192.168.0.1
 轴：       1
 位置单位： pulse（脉冲）
 ```
 
-这些只是厂家示例值，不代表现场设备已经确认。程序不会把它们写入 `AxisCalibration`。
+证据来自 `官方控制程序/system/ComParam.xml` 的 `PCIP` / `CardIP`，且厂家 Python 示例按
+`GA_OpenByIP(PCIP, CardIP, 0, 0)` 的顺序调用。程序仍不设置隐式网络默认值，运行时必须由
+操作者现场确认并显式输入。
 
 V0.2 明确分离三层坐标：
 
@@ -74,7 +77,7 @@ GAS.dll:              controller coordinate, pulse/count
 
 | 能力 | 厂家 API | 证据与当前处理 |
 |---|---|---|
-| 连接 | `GA_OpenByIP(controller_ip, host_ip, 0, 0)` | 示例实际调用；返回 0 成功 |
+| 连接 | `GA_OpenByIP(pc_ip, card_ip, 0, 0)` | 官方配置和示例共同确认；返回 0 成功 |
 | 断开 | `GA_Close()` | 示例实际调用 |
 | 轴选择 | 每个轴 API 的第一个参数，如 `GA_GetPrfPos(1, ...)` | 示例确认轴号 1；文档注释写轴范围 1..8 |
 | 读规划位置 | `GA_GetPrfPos(axis, double*, 1, 0)` | 示例说明单位 pulse |
@@ -105,11 +108,13 @@ GAS.dll:              controller coordinate, pulse/count
 ### 尚未确认，禁止在真实设备上猜测
 
 - 设备枚举：示例只有固定 IP 连接，没有枚举 API；
-- pulse/mm 标定、真实运动方向、机械行程；
+- 目标物理轴与官方 GUI 逻辑轴号的对应关系；
+- `PulsPerRev=10000`、`Lead=1`、`Rate=1` 的准确换算公式，以及 pulse 正方向；
+- 目标轴应采用哪一组 `PosLimt` / `NegLimt` 行程；
 - `GA_GetSts` 各 bit 的含义和“运动完成”判据；
 - 编码器实际位置读取方式；
 - `GA_Stop` 的参数、急停/减速停模式；
-- Home/回零流程；
+- Python 可调用的 Home/回零 API 签名（操作员通过官方 GUI 回零的流程已由手册确认）；
 - 正负限位输入和软件限位函数的准确签名；
 - 轴 2..8 对应的 `GA_Update` 掩码。
 
@@ -171,13 +176,13 @@ output/20260916_143210_mock_demo/
 ```powershell
 cd C:\slm_3d\dimension_camera
 $dllPath = Read-Host "Enter the VERIFIED GAS.dll path"
-$controllerIp = Read-Host "Enter the VERIFIED controller IP"
-$hostIp = Read-Host "Enter the VERIFIED PC adapter IP"
+$pcIp = Read-Host "Enter the VERIFIED PC adapter IP (PCIP)"
+$cardIp = Read-Host "Enter the VERIFIED motion card IP (CardIP)"
 $axisId = [int](Read-Host "Enter the VERIFIED axis number")
 .\.venv\Scripts\python.exe scripts\verify_stage_readonly.py `
   --dll $dllPath `
-  --controller-ip $controllerIp `
-  --host-ip $hostIp `
+  --pc-ip $pcIp `
+  --card-ip $cardIp `
   --axis $axisId `
   --confirm-read-only
 ```
@@ -207,8 +212,8 @@ cd C:\slm_3d\dimension_camera
 cd C:\slm_3d\dimension_camera
 .\.venv\Scripts\python.exe main.py --capture-current `
   --stage-dll "C:\slm_3d\positioner\GAS.dll" `
-  --controller-ip "<confirmed-controller-ip>" `
-  --host-ip "<confirmed-pc-adapter-ip>" `
+  --pc-ip "<confirmed-pc-adapter-ip>" `
+  --card-ip "<confirmed-motion-card-ip>" `
   --axis <confirmed-axis-id> `
   --camera-index <camera-list-index> `
   --confirm-current-capture

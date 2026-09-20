@@ -104,7 +104,7 @@ def complete_calibration() -> AxisCalibration:
 
 def connection_values() -> dict[str, str]:
     # RFC 5737 TEST-NET，仅供 Fake DLL 单元测试，不会连接真实网络。
-    return {"controller_ip": "192.0.2.10", "host_ip": "192.0.2.11"}
+    return {"pc_ip": "192.0.2.10", "card_ip": "192.0.2.11"}
 
 
 def test_vendor_library_loads_without_connecting_hardware() -> None:
