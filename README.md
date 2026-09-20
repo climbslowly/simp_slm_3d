@@ -234,6 +234,8 @@ Reset、清零、使能、Home、Stop 或 Move。相机保持现有配置，只�
 - `Camera_<serial>_current_raw_pulse_<value>.tiff`：原始单帧 TIFF；
 - `Camera_<serial>_current_raw_pulse_<value>.npy`：NumPy 原生数组，可用
   `numpy.load(path, allow_pickle=False)` 快速读取；
+- `Camera_<serial>_*.mat`：MATLAB 数据文件。MATLAB 中可使用
+  `data = load('文件名.mat'); image = data.image;` 直接获得原始图像矩阵；
 - `capture_metadata.json`：原始规划位置、raw status、相机型号/序列号、当前曝光、图像尺寸和数据类型。
 
 注意：`GA_GetPrfPos` 已确认的单位是 `pulse/count`，且语义是**规划位置**，不是已验证的编码器

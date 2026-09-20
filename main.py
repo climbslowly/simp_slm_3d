@@ -50,6 +50,37 @@ def run_mock_demo(output: Path) -> Path:
         stage.disconnect()
 
 
+def write_matlab_file(
+    matlab_path: Path, image: np.ndarray, metadata: dict[str, object]
+) -> None:
+    """保存 MATLAB v5 .mat，保留可直接使用的图像矩阵和关键采集字段。"""
+    try:
+        from scipy.io import savemat
+    except ImportError as exc:
+        raise RuntimeError(
+            "保存 .mat 需要 scipy。请运行：python -m pip install -r requirements.txt"
+        ) from exc
+
+    camera = metadata["camera"]
+    assert isinstance(camera, dict)
+    mat_data: dict[str, object] = {
+        # MATLAB 中直接使用：data = load('*.mat'); image = data.image;
+        "image": image,
+        "camera_serial": str(camera["serial_number"]),
+        "camera_model": str(camera["model_name"]),
+        "transport_layer": str(camera["transport_layer_type"]),
+        "exposure_us": float(camera["exposure_us"]),
+        "capture_time_utc": str(metadata["capture_time_utc"]),
+        # 完整、可追溯 metadata 同时以 JSON 字符串写入 MAT 文件。
+        "metadata_json": json.dumps(metadata, ensure_ascii=False),
+    }
+    stage = metadata.get("stage")
+    if isinstance(stage, dict):
+        mat_data["stage_position_pulse"] = float(stage["position_value"])
+        mat_data["stage_raw_status"] = int(stage["raw_status_decimal"])
+    savemat(matlab_path, mat_data, do_compression=True)
+
+
 def capture_current_position(
     *,
     output: Path,
@@ -58,7 +89,7 @@ def capture_current_position(
     host_ip: str,
     axis_id: int,
     camera_device: BaslerDeviceInfo,
-) -> tuple[Path, Path, Path, dict[str, object]]:
+) -> tuple[Path, Path, Path, Path, dict[str, object]]:
     """只读当前位置并采集一帧；绝不调用位移台的运动/使能 API。
 
     GAS 的已确认位置 API 返回的是规划位置原值（pulse/count）。在没有经过现场
@@ -99,6 +130,7 @@ def capture_current_position(
     stem = f"Camera_{safe_serial}_current_raw_pulse_{position_pulse:g}"
     image_path = session_dir / f"{stem}.tiff"
     numpy_path = session_dir / f"{stem}.npy"
+    matlab_path = session_dir / f"{stem}.mat"
     tifffile.imwrite(image_path, image)
     np.save(numpy_path, image, allow_pickle=False)
     metadata: dict[str, object] = {
@@ -125,17 +157,19 @@ def capture_current_position(
         "files": {
             "tiff": image_path.name,
             "numpy": numpy_path.name,
+            "matlab": matlab_path.name,
         },
     }
+    write_matlab_file(matlab_path, image, metadata)
     (session_dir / "capture_metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    return session_dir, image_path, numpy_path, metadata
+    return session_dir, image_path, numpy_path, matlab_path, metadata
 
 
 def capture_single_camera(
     *, output: Path, camera_device: BaslerDeviceInfo
-) -> tuple[Path, Path, Path, dict[str, object]]:
+) -> tuple[Path, Path, Path, Path, dict[str, object]]:
     """按枚举序号对应的稳定序列号采集一帧；不访问位移台。"""
     camera = BaslerCamera(camera_device.serial_number)
     try:
@@ -158,6 +192,7 @@ def capture_single_camera(
     stem = f"Camera_{safe_serial}_single_frame"
     image_path = session_dir / f"{stem}.tiff"
     numpy_path = session_dir / f"{stem}.npy"
+    matlab_path = session_dir / f"{stem}.mat"
     tifffile.imwrite(image_path, image)
     np.save(numpy_path, image, allow_pickle=False)
     metadata: dict[str, object] = {
@@ -171,12 +206,17 @@ def capture_single_camera(
             "image_shape": list(image.shape),
             "image_dtype": str(image.dtype),
         },
-        "files": {"tiff": image_path.name, "numpy": numpy_path.name},
+        "files": {
+            "tiff": image_path.name,
+            "numpy": numpy_path.name,
+            "matlab": matlab_path.name,
+        },
     }
+    write_matlab_file(matlab_path, image, metadata)
     (session_dir / "capture_metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    return session_dir, image_path, numpy_path, metadata
+    return session_dir, image_path, numpy_path, matlab_path, metadata
 
 
 def print_basler_camera_list() -> list[BaslerDeviceInfo]:
@@ -259,12 +299,13 @@ def main() -> None:
         if not args.confirm_camera_capture:
             parser.error("必须显式提供 --confirm-camera-capture")
         camera_device = select_basler_camera(args.camera_index)
-        session_dir, image_path, numpy_path, _metadata = capture_single_camera(
+        session_dir, image_path, numpy_path, matlab_path, _metadata = capture_single_camera(
             output=args.output or Path("data/captures"),
             camera_device=camera_device,
         )
         print(f"单帧 TIFF = {image_path.resolve()}")
         print(f"NumPy 数组 = {numpy_path.resolve()}")
+        print(f"MATLAB 数据 = {matlab_path.resolve()}")
         print(f"采集 metadata = {(session_dir / 'capture_metadata.json').resolve()}")
         return
 
@@ -284,7 +325,7 @@ def main() -> None:
     assert args.host_ip is not None and args.axis is not None
     assert args.camera_index is not None
     camera_device = select_basler_camera(args.camera_index)
-    session_dir, image_path, numpy_path, metadata = capture_current_position(
+    session_dir, image_path, numpy_path, matlab_path, metadata = capture_current_position(
         output=args.output or Path("data/captures"),
         dll_path=args.stage_dll,
         controller_ip=args.controller_ip,
@@ -295,6 +336,7 @@ def main() -> None:
     print(f"当前位置（规划位置原值）= {metadata['stage']['position_value']} pulse/count")
     print(f"单帧 TIFF = {image_path.resolve()}")
     print(f"NumPy 数组 = {numpy_path.resolve()}")
+    print(f"MATLAB 数据 = {matlab_path.resolve()}")
     print(f"采集 metadata = {(session_dir / 'capture_metadata.json').resolve()}")
 
 
