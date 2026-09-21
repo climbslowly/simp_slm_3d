@@ -29,13 +29,13 @@ STATE_TEXT = {
 }
 
 OBJECTIVE_AXIS_TEXT = {
-    "X": "X（轴3 · 物理Y）",
-    "Y": "Y（轴5 · 物理Z）",
-    "Z": "Z（轴4 · 光传播/物理X）",
+    "X": "X（物理+Y / 轴3+）",
+    "Y": "Y（物理+Z / 轴5-）",
+    "Z": "Z（物理+X / 轴4+ / 逆光）",
 }
 CAMERA_AXIS_TEXT = {
-    "X": "X（轴1 · 物理Y）",
-    "Y": "Y（轴2 · 物理Z）",
+    "X": "X（物理+Y / 轴1+）",
+    "Y": "Y（物理+Z / 轴2-）",
 }
 
 
@@ -206,7 +206,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_button = QtWidgets.QPushButton("移动到目标（Mock）")
         self.move_button.clicked.connect(self._move_to_targets)
         grid.addWidget(self.move_button, 6, 1, 1, 3)
-        note = QtWidgets.QLabel("* 仅为 Mock 模拟位置；轴号映射由操作者提供，正负方向尚未实机验证")
+        note = QtWidgets.QLabel("* 轴号与方向已按现场观察录入；当前仍仅为 Mock，真实运动未开放")
         note.setWordWrap(True)
         note.setStyleSheet("color:#a85d00")
         grid.addWidget(note, 7, 0, 1, 4)

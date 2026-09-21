@@ -49,15 +49,24 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     config = json.loads((session_dir / "scan_config.json").read_text(encoding="utf-8"))
     assert config["device_mode"] == "MOCK" and config["stage"]["real_motion_enabled"] is False
     assert config["stage"]["axis_mapping"]["objective"]["Y"]["controller_axis"] == 5
-    assert config["stage"]["direction_sign_verified"] is False
+    assert config["stage"]["direction_sign_verified"] is True
+    assert config["stage"]["axis_mapping"]["camera"]["Y"]["controller_sign_for_gui_positive"] == -1
     assert {row["camera_x_mm"] for row in rows} == {"0.0"}
     assert {row["camera_y_mm"] for row in rows} == {"0.0"}
+    assert {row["axis_mapping_id"] for row in rows} == {"five_axis_operator_observed_v1"}
     matlab = loadmat(session_dir / "scan_data.mat", squeeze_me=True)
+    assert int(matlab["mat_export_version"]) == 2
     assert matlab["scan_id"] == config["scan_id"]
     assert matlab["target_xyz_mm"].shape == (15, 3)
     assert matlab["actual_xyz_mm"].shape == (15, 3)
     assert matlab["camera_xy_mm"].shape == (15, 2)
     assert np.allclose(matlab["camera_xy_mm"], 0.0)
+    assert matlab["axis_mapping_id"] == "five_axis_operator_observed_v1"
+    assert np.array_equal(matlab["objective_controller_axis_order"], [3, 5, 4])
+    assert np.array_equal(matlab["objective_controller_sign_for_gui_positive"], [1, -1, 1])
+    assert np.array_equal(matlab["camera_controller_axis_order"], [1, 2])
+    assert np.array_equal(matlab["camera_controller_sign_for_gui_positive"], [1, -1])
+    assert matlab["objective_z_positive_optical_direction"] == "against_propagation"
     assert matlab["metric_value"].shape == (15,)
     assert matlab["metric_grid"].shape == (3, 5)
     assert np.isclose(matlab["metric_grid"][1, 2], float(rows[7]["metric_value"]))

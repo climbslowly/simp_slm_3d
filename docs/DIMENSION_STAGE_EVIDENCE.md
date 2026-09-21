@@ -1,6 +1,6 @@
 # Dimension Stage Hardware Evidence Matrix
 
-最后更新：2026-09-20，软件版本：bring-up v0.2。
+最后更新：2026-09-21，软件版本：bring-up v0.2 + GUI-M1。
 
 ## 证据规则
 
@@ -12,6 +12,8 @@
 
 - `confirmed-source`：调用形式在当前厂家示例中出现，但不等于已连接本机硬件验证；
 - `confirmed-local`：已经完成不接触真实硬件的本机验证；
+- `confirmed-hardware-read-only`：已在实验电脑连接真实控制器并完成只读验证；
+- `operator-observed`：操作者通过厂家官方控制软件现场观察确认，尚非 Python 自动运动验证；
 - `unverified-hardware`：需要真实控制器只读验证；
 - `unknown`：没有足够证据，禁止调用或解释。
 
@@ -20,10 +22,10 @@
 | Item | Status | Evidence | Safe action now |
 |---|---|---|---|
 | 64-bit DLL load | confirmed-local | `tests/test_dimension_stage.py`; `positioner/GAS.dll` SHA256 `349014A5F16E9C2DEE28978453AD718DCE52EF52708D7E375AFF7D5D30AF2ED3` 已由 64-bit Python 加载 | allowed, Level 0 |
-| Controller connection | confirmed-source / unverified-hardware | 厂家 Python 示例调用 `GA_OpenByIP(bytes, bytes, 0, 0)` | 仅在 Phase A 显式执行 |
+| Controller connection | confirmed-hardware-read-only | 厂家 Python 示例调用 `GA_OpenByIP(bytes, bytes, 0, 0)`；实验电脑只读连接成功 | 仅允许 Phase A 只读入口 |
 | PCIP / CardIP | documented in supplied official package | `ComParam.xml` 为 PCIP `192.168.0.200`、CardIP `192.168.0.1`；Python 示例以此顺序传给 `GA_OpenByIP` | 仍由现场人工确认输入，无程序默认值 |
 | Disconnect | confirmed-source / unverified-hardware | 厂家 Python 示例调用 `GA_Close()` | Phase A finally 中允许 |
-| Axis selection | partly confirmed | 示例把轴号作为第一个参数；官方 GUI 配置含 14 个逻辑轴，现场物理轴映射仍未知 | 用户必须显式填写，禁止默认认定 |
+| Axis selection | operator-observed | 相机 X/Y = 轴1/2；物镜 X/Y/Z = 轴3/5/4 | 写入 GUI-M1 元数据；真实运动仍禁止 |
 | Planned-position read signature | confirmed-source / unverified-hardware | `Python-正转20000个脉冲-延时5秒-反转20000个脉冲/jason.py`: `GA_GetPrfPos(axis, double*, 1, 0)` | 可读取 raw pulse，不转成 mm |
 | Actual encoder position | unknown | 当前资料没有已确认的实际编码器位置 API | do not claim/read |
 | `GA_GetSts` signature | confirmed-source / unverified-hardware | 同一厂家示例：`GA_GetSts(axis, long*, 1, 0)` | 可读取并打印 raw value |
@@ -36,8 +38,9 @@
 | `GA_SetVel` | confirmed-source only | 厂家示例说明单位 pulse/ms | Phase A 禁止调用 |
 | Axis 1 `GA_Update(1)` | confirmed-source only | 厂家示例仅演示轴 1 | Phase A 禁止调用 |
 | Multi-axis start mask | unknown | 没有轴 2..8 mask 的官方资料 | motion forbidden for non-axis-1 |
-| pulse/mm | candidate, not yet accepted | 官方 GUI 配置对各轴写有 `PulsPerRev=10000`、`Lead=1`、`Rate=1`，可推测线性轴候选值为 10000 pulse/mm，但缺少字段公式和目标轴确认 | 在确认轴映射与换算公式前禁止用于真实运动 |
-| Direction sign | unknown | 没有确认 pulse 正方向对应的物理方向 | motion forbidden |
+| Axis 1 pulse/mm | confirmed by read/GUI comparison | `-57363 pulse` 对应官方绝对坐标 `-5.73630 mm`；官方 `+` 后读数为 `-57362 pulse` | 记录为轴1 `10000 pulse/mm`；不外推到其他轴 |
+| Axis 2..5 pulse/mm | candidate, not yet accepted | 官方 GUI 配置写有 `PulsPerRev=10000`、`Lead=1`、`Rate=1`，但未逐轴完成读数对照 | motion forbidden |
+| Direction sign | operator-observed | 轴1 `+→+Y`；轴2 `+→-Z`；轴3 `+→+Y`；轴4 `+→+X`（逆光、物镜向前）；轴5 `+→-Z` | 作为 GUI/数据坐标映射；不解除 motion safety gate |
 | Mechanical travel | axis mapping unknown | 官方 GUI 配置含逐轴 `PosLimt` / `NegLimt`，轴 1..6 为 +26/-26 mm；其他轴不同 | 必须先确认实际扫描轴号，再采用对应范围 |
 | Controller zero ↔ physical mm | unknown | 没有 Home/坐标定义资料 | motion forbidden |
 | Software limits | unknown | 虽能观察到相关 DLL symbol，但无可靠签名/语义 | do not call |

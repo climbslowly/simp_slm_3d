@@ -19,7 +19,8 @@ from scan.spatial_scan import SpatialPoint, SpatialScanPlan
 
 SPATIAL_LOG_COLUMNS = [
     "timestamp_utc", "scan_id", "point_id", "order_index", "row", "col",
-    "scan_type", "target_x_mm", "target_y_mm", "target_z_mm",
+    "scan_type", "axis_mapping_id", "direction_mapping_status",
+    "target_x_mm", "target_y_mm", "target_z_mm",
     "actual_x_mm", "actual_y_mm", "actual_z_mm", "position_source",
     "camera_x_mm", "camera_y_mm", "camera_position_source",
     "camera_source", "camera_serial", "camera_model", "exposure_us",
@@ -104,6 +105,8 @@ class SpatialDataManager:
         self.session_dir: Path | None = None
         self._file = None
         self._writer: csv.DictWriter | None = None
+        self._axis_mapping_id = "unavailable"
+        self._direction_mapping_status = "unavailable"
 
     def open(self, *, stage_info: dict[str, object], camera_info: dict[str, object]) -> Path:
         self.plan.save_root.mkdir(parents=True, exist_ok=True)
@@ -126,6 +129,8 @@ class SpatialDataManager:
             "camera_info": camera_info,
             "position_meaning": "mock_simulated; not encoder feedback",
         })
+        self._axis_mapping_id = str(stage_info.get("axis_mapping_id", "unavailable"))
+        self._direction_mapping_status = str(stage_info.get("axis_mapping_status", "unavailable"))
         _atomic_json(session / "scan_config.json", config)
         self._file = (session / "scan_log.csv").open("w", newline="", encoding="utf-8-sig")
         self._writer = csv.DictWriter(self._file, fieldnames=SPATIAL_LOG_COLUMNS)
@@ -167,6 +172,8 @@ class SpatialDataManager:
             "row": "" if point.row is None else point.row,
             "col": "" if point.col is None else point.col,
             "scan_type": self.plan.scan_type,
+            "axis_mapping_id": self._axis_mapping_id,
+            "direction_mapping_status": self._direction_mapping_status,
             **{f"target_{axis.lower()}_mm": point.targets_mm[axis] for axis in ("X", "Y", "Z")},
             **{f"actual_{axis.lower()}_mm": actual_mm[axis] for axis in ("X", "Y", "Z")},
             "position_source": "mock_simulated", "camera_source": "mock",
@@ -194,6 +201,8 @@ class SpatialDataManager:
             "row": "" if point.row is None else point.row,
             "col": "" if point.col is None else point.col,
             "scan_type": self.plan.scan_type,
+            "axis_mapping_id": self._axis_mapping_id,
+            "direction_mapping_status": self._direction_mapping_status,
             **{f"target_{axis.lower()}_mm": point.targets_mm[axis] for axis in ("X", "Y", "Z")},
             "position_source": "unavailable", "camera_source": "mock",
             "camera_serial": self.plan.camera_serial, "exposure_us": self.plan.exposure_us,
@@ -338,14 +347,57 @@ def export_spatial_session_mat(directory: Path) -> Path:
                 metric_grid[int(row[index, 0]), int(col[index, 0])] = metric_value[index, 0]
 
     roi_xywh = config.get("roi_xywh", [])
+    stage_info = config.get("stage", {})
+    if not isinstance(stage_info, dict):
+        stage_info = {}
+    axis_mapping = stage_info.get("axis_mapping", {})
+    if not isinstance(axis_mapping, dict):
+        axis_mapping = {}
+
+    def mapping_arrays(group: str, logical_axes: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, list[object]]:
+        group_mapping = axis_mapping.get(group, {})
+        if not isinstance(group_mapping, dict):
+            group_mapping = {}
+        controller_axes = np.full((1, len(logical_axes)), np.nan, dtype=np.float64)
+        controller_signs = np.full((1, len(logical_axes)), np.nan, dtype=np.float64)
+        physical_axes: list[object] = []
+        for index, logical_axis in enumerate(logical_axes):
+            entry = group_mapping.get(logical_axis, {})
+            if not isinstance(entry, dict):
+                entry = {}
+            controller_axes[0, index] = _float_or_nan(entry.get("controller_axis"))
+            controller_signs[0, index] = _float_or_nan(entry.get("controller_sign_for_gui_positive"))
+            physical_axes.append(str(entry.get("physical_axis", "")))
+        return controller_axes, controller_signs, physical_axes
+
+    objective_controller_axes, objective_controller_signs, objective_physical_axes = mapping_arrays(
+        "objective", ("X", "Y", "Z")
+    )
+    camera_controller_axes, camera_controller_signs, camera_physical_axes = mapping_arrays(
+        "camera", ("X", "Y")
+    )
     successful_count = sum(status == "ok" for status in statuses)
     payload: dict[str, object] = {
-        "mat_export_version": np.int32(1),
+        "mat_export_version": np.int32(2),
         "scan_id": str(config.get("scan_id", "")),
         "scan_type": str(config.get("scan_type", "")),
         "device_mode": str(config.get("device_mode", "")),
         "position_meaning": str(config.get("position_meaning", "")),
+        "axis_mapping_id": str(stage_info.get("axis_mapping_id", "")),
+        "axis_mapping_status": str(stage_info.get("axis_mapping_status", "")),
+        "direction_verification_method": str(stage_info.get("direction_verification_method", "")),
         "coordinate_axis_order": _string_column(["X", "Y", "Z"]),
+        "objective_controller_axis_order": objective_controller_axes,
+        "objective_controller_sign_for_gui_positive": objective_controller_signs,
+        "objective_physical_axis_for_gui_order": _string_column(objective_physical_axes),
+        "camera_controller_axis_order": camera_controller_axes,
+        "camera_controller_sign_for_gui_positive": camera_controller_signs,
+        "camera_physical_axis_for_gui_order": _string_column(camera_physical_axes),
+        "objective_z_positive_optical_direction": str(
+            axis_mapping.get("objective", {}).get("Z", {}).get(
+                "controller_positive_optical_direction", ""
+            ) if isinstance(axis_mapping.get("objective", {}), dict) else ""
+        ),
         "point_id": point_id,
         "order_index": order_index,
         "row": row,

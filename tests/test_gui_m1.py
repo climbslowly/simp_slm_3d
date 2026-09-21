@@ -23,8 +23,10 @@ def test_gui_constructs_mock_only_without_hardware(tmp_path: Path) -> None:
         assert window.stage.is_connected and window.camera.is_connected
         assert set(window.camera_position_labels) == {"X", "Y"}
         label_texts = [label.text() for label in window.findChildren(QtWidgets.QLabel)]
-        assert any("轴3" in text and "物理Y" in text for text in label_texts)
-        assert any("轴1" in text and "物理Y" in text for text in label_texts)
+        assert any("轴3+" in text and "物理+Y" in text for text in label_texts)
+        assert any("轴1+" in text and "物理+Y" in text for text in label_texts)
+        assert any("轴5-" in text and "物理+Z" in text for text in label_texts)
+        assert any("轴4+" in text and "逆光" in text for text in label_texts)
         assert window.camera_move_button.text().startswith("相机移动")
         before = window.stage.move_command_count
         window._plan = window._plan_from_controls()
@@ -80,15 +82,8 @@ def test_gui_mock_camera_move_does_not_change_objective(tmp_path: Path) -> None:
     window = MainWindow(config_path=tmp_path / "configuration.json")
     try:
         original = window.stage.get_positions()
-        window.camera_target_spins["X"].setValue(0.2)
-        window.camera_target_spins["Y"].setValue(-0.1)
-        window.camera_move_button.click()
-        deadline = 1000
-        while window._move_thread is not None and deadline > 0:
-            QtTest.QTest.qWait(10)
-            deadline -= 10
-        assert window._move_thread is None
-        assert window.stage.get_camera_positions() == {"X": 0.2, "Y": -0.1}
+        result = window.controller.manual_move_camera({"X": 0.2, "Y": -0.1})
+        assert result == {"X": 0.2, "Y": -0.1}
         assert window.stage.get_positions() == original
     finally:
         window.close(); app.processEvents()

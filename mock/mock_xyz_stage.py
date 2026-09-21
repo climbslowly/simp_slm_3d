@@ -1,7 +1,7 @@
 """GUI-M1 的线程安全五轴模拟位移台。
 
 兼容原有物镜 ``X/Y/Z`` API，同时增加探测相机 ``X/Y``。这里的 X/Y/Z 是
-光学逻辑坐标；控制器轴号及实验室物理轴映射只作为已报告、待实机确认的元数据。
+光学逻辑坐标；控制器轴号及方向来自现场人工观察，Mock 本身不连接真实控制器。
 """
 
 from __future__ import annotations
@@ -19,16 +19,38 @@ class MockXYZStage:
     _OBJECTIVE_KEYS = {"X": "objective_X", "Y": "objective_Y", "Z": "objective_Z"}
     _CAMERA_KEYS = {"X": "camera_X", "Y": "camera_Y"}
 
-    # 映射来自操作者描述；正负方向、控制器配置和机械行程尚未实机验证。
+    # 轴身份和方向来自操作者使用官方控制软件的现场观察；标定、行程和安全 API 仍未知。
     AXIS_MAPPING = {
         "camera": {
-            "X": {"controller_axis": 1, "optical_role": "transverse_x", "physical_axis": "Y"},
-            "Y": {"controller_axis": 2, "optical_role": "transverse_y", "physical_axis": "Z"},
+            "X": {
+                "controller_axis": 1, "optical_role": "transverse_x", "physical_axis": "Y",
+                "controller_positive_physical_direction": "+Y",
+                "controller_sign_for_gui_positive": 1,
+            },
+            "Y": {
+                "controller_axis": 2, "optical_role": "transverse_y", "physical_axis": "Z",
+                "controller_positive_physical_direction": "-Z",
+                "controller_sign_for_gui_positive": -1,
+            },
         },
         "objective": {
-            "X": {"controller_axis": 3, "optical_role": "transverse_x", "physical_axis": "Y"},
-            "Y": {"controller_axis": 5, "optical_role": "transverse_y", "physical_axis": "Z"},
-            "Z": {"controller_axis": 4, "optical_role": "propagation", "physical_axis": "X"},
+            "X": {
+                "controller_axis": 3, "optical_role": "transverse_x", "physical_axis": "Y",
+                "controller_positive_physical_direction": "+Y",
+                "controller_sign_for_gui_positive": 1,
+            },
+            "Y": {
+                "controller_axis": 5, "optical_role": "transverse_y", "physical_axis": "Z",
+                "controller_positive_physical_direction": "-Z",
+                "controller_sign_for_gui_positive": -1,
+            },
+            "Z": {
+                "controller_axis": 4, "optical_role": "propagation_axis", "physical_axis": "X",
+                "controller_positive_physical_direction": "+X",
+                "controller_sign_for_gui_positive": 1,
+                "controller_positive_optical_direction": "against_propagation",
+                "controller_positive_mechanical_observation": "objective_forward",
+            },
         },
     }
 
@@ -166,8 +188,11 @@ class MockXYZStage:
             "position_source": "mock_simulated",
             "unit": "mm (simulation only)",
             "real_motion_enabled": False,
-            "axis_mapping_status": "user_reported_axis_identity; direction_sign_unverified",
-            "direction_sign_verified": False,
+            "axis_mapping_id": "five_axis_operator_observed_v1",
+            "axis_mapping_status": "operator_observed_axis_identity_and_direction",
+            "direction_sign_verified": True,
+            "direction_verification_method": "operator_observed_with_official_controller_software",
+            "gui_coordinate_convention": "positive_gui_coordinates_follow_positive_physical_axes",
             "axis_mapping": self.AXIS_MAPPING,
             "camera_positions_mm_at_scan_start": self.get_camera_positions(),
             "objective_positions_mm_at_scan_start": self.get_positions(),

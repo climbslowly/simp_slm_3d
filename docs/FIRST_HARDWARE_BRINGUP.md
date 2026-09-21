@@ -53,7 +53,7 @@ Phase A 明确禁止：Reset、Zero、Encoder On/Off、Axis/Servo On、Home、Jo
 - 控制器型号、固件版本与 DLL/SDK 版本匹配；
 - 现场轴号；
 - pulse/mm；
-- pulse 正方向对应的物理方向；
+- pulse 正方向对应的物理方向（轴1～5已由操作者现场观察记录，但仍须与最终配置绑定）；
 - 机械 travel min/max；
 - controller pulse=0 对应的物理 mm 坐标；
 - 正负限位信号定义和当前状态；
