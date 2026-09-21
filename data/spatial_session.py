@@ -21,6 +21,7 @@ SPATIAL_LOG_COLUMNS = [
     "timestamp_utc", "scan_id", "point_id", "order_index", "row", "col",
     "scan_type", "target_x_mm", "target_y_mm", "target_z_mm",
     "actual_x_mm", "actual_y_mm", "actual_z_mm", "position_source",
+    "camera_x_mm", "camera_y_mm", "camera_position_source",
     "camera_source", "camera_serial", "camera_model", "exposure_us",
     "pixel_format", "roi_x", "roi_y", "roi_width", "roi_height",
     "metric_name", "metric_value", "roi_mean", "roi_sum", "image_max",
@@ -47,6 +48,25 @@ def _atomic_json(path: Path, payload: dict[str, object]) -> None:
         except OSError:
             pass
         raise
+
+
+def _float_or_nan(value: object) -> float:
+    if value in (None, ""):
+        return float("nan")
+    return float(value)
+
+
+def _string_column(values: list[object]) -> np.ndarray:
+    """用 MATLAB cell column 保存变长字符串，避免补空格的 char matrix。"""
+    return np.asarray([str(value) for value in values], dtype=object).reshape(-1, 1)
+
+
+def _relative_image_path(value: object) -> Path:
+    """日志统一允许 Windows/Unix 分隔符，回读时仍限制在扫描目录下。"""
+    parts = [part for part in str(value).replace("\\", "/").split("/") if part]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError(f"无效的原图相对路径：{value}")
+    return Path(*parts)
 
 
 def roi_metrics(image: np.ndarray, roi_xywh: tuple[int, int, int, int], metric: str) -> dict[str, float | int]:
@@ -120,6 +140,7 @@ class SpatialDataManager:
         actual_mm: dict[str, float],
         image: np.ndarray,
         camera_model: str,
+        camera_positions_mm: dict[str, float],
     ) -> dict[str, object]:
         if self.session_dir is None or self._writer is None or self._file is None:
             raise RuntimeError("数据会话尚未打开")
@@ -149,6 +170,8 @@ class SpatialDataManager:
             **{f"target_{axis.lower()}_mm": point.targets_mm[axis] for axis in ("X", "Y", "Z")},
             **{f"actual_{axis.lower()}_mm": actual_mm[axis] for axis in ("X", "Y", "Z")},
             "position_source": "mock_simulated", "camera_source": "mock",
+            "camera_x_mm": camera_positions_mm["X"], "camera_y_mm": camera_positions_mm["Y"],
+            "camera_position_source": "mock_simulated",
             "camera_serial": self.plan.camera_serial, "camera_model": camera_model,
             "exposure_us": self.plan.exposure_us, "pixel_format": str(image.dtype),
             "roi_x": x, "roi_y": y, "roi_width": width, "roi_height": height,
@@ -188,6 +211,13 @@ class SpatialDataManager:
         self._file = None
         self._writer = None
 
+    def export_mat(self) -> Path:
+        """关闭 CSV 后生成扫描级 MAT；TIFF 仍是唯一原始像素副本。"""
+        self.close()
+        if self.session_dir is None:
+            raise RuntimeError("数据会话尚未打开")
+        return export_spatial_session_mat(self.session_dir)
+
 
 @dataclass
 class SpatialSession:
@@ -216,5 +246,167 @@ class SpatialSession:
         record = next((item for item in self.successful_records if int(item["point_id"]) == point_id), None)
         if record is None:
             raise KeyError(f"point_id={point_id} 没有成功保存的原图")
-        path = self.directory / record["filename"]
+        path = self.directory / _relative_image_path(record["filename"])
         return tifffile.imread(path)
+
+
+def export_spatial_session_mat(directory: Path) -> Path:
+    """把 scan_config + scan_log 汇总为 MATLAB v5 文件，不复制 TIFF 像素栈。"""
+    try:
+        from scipy.io import savemat
+    except ImportError as exc:
+        raise RuntimeError(
+            "导出 scan_data.mat 需要 scipy；请安装 requirements.txt"
+        ) from exc
+
+    session = SpatialSession.open(Path(directory))
+    config = session.config
+    points = config.get("points")
+    if not isinstance(points, list) or not points:
+        raise ValueError("scan_config.json 缺少有效 points")
+    total = len(points)
+    point_id = np.empty((total, 1), dtype=np.int64)
+    order_index = np.empty((total, 1), dtype=np.int64)
+    row = np.full((total, 1), np.nan, dtype=np.float64)
+    col = np.full((total, 1), np.nan, dtype=np.float64)
+    target_xyz = np.full((total, 3), np.nan, dtype=np.float64)
+    actual_xyz = np.full((total, 3), np.nan, dtype=np.float64)
+    camera_xy = np.full((total, 2), np.nan, dtype=np.float64)
+    metric_value = np.full((total, 1), np.nan, dtype=np.float64)
+    roi_mean = np.full((total, 1), np.nan, dtype=np.float64)
+    roi_sum = np.full((total, 1), np.nan, dtype=np.float64)
+    image_max = np.full((total, 1), np.nan, dtype=np.float64)
+    saturation_fraction = np.full((total, 1), np.nan, dtype=np.float64)
+    statuses: list[object] = ["unacquired"] * total
+    errors: list[object] = [""] * total
+    timestamps: list[object] = [""] * total
+    filenames: list[object] = [""] * total
+    image_file_exists = np.zeros((total, 1), dtype=np.uint8)
+    position_sources: list[object] = ["unavailable"] * total
+
+    id_to_index: dict[int, int] = {}
+    for index, raw_point in enumerate(points):
+        if not isinstance(raw_point, dict):
+            raise ValueError("scan_config.json 的 point 结构无效")
+        current_id = int(raw_point["point_id"])
+        if current_id in id_to_index:
+            raise ValueError(f"scan_config.json 含重复 point_id={current_id}")
+        id_to_index[current_id] = index
+        point_id[index, 0] = current_id
+        order_index[index, 0] = int(raw_point["order_index"])
+        row[index, 0] = _float_or_nan(raw_point.get("row"))
+        col[index, 0] = _float_or_nan(raw_point.get("col"))
+        targets = raw_point.get("targets_mm")
+        if not isinstance(targets, dict):
+            raise ValueError(f"point_id={current_id} 缺少 targets_mm")
+        target_xyz[index, :] = [float(targets[axis]) for axis in ("X", "Y", "Z")]
+
+    for record in session.records:
+        current_id = int(record["point_id"])
+        if current_id not in id_to_index:
+            raise ValueError(f"scan_log.csv 含计划外 point_id={current_id}")
+        index = id_to_index[current_id]
+        statuses[index] = record.get("status", "")
+        errors[index] = record.get("error_message", "")
+        timestamps[index] = record.get("timestamp_utc", "")
+        filenames[index] = record.get("filename", "")
+        if filenames[index]:
+            image_file_exists[index, 0] = int(
+                (session.directory / _relative_image_path(filenames[index])).is_file()
+            )
+        position_sources[index] = record.get("position_source", "unavailable")
+        actual_xyz[index, :] = [
+            _float_or_nan(record.get(f"actual_{axis}_mm")) for axis in ("x", "y", "z")
+        ]
+        camera_xy[index, :] = [
+            _float_or_nan(record.get(f"camera_{axis}_mm")) for axis in ("x", "y")
+        ]
+        metric_value[index, 0] = _float_or_nan(record.get("metric_value"))
+        roi_mean[index, 0] = _float_or_nan(record.get("roi_mean"))
+        roi_sum[index, 0] = _float_or_nan(record.get("roi_sum"))
+        image_max[index, 0] = _float_or_nan(record.get("image_max"))
+        saturation_fraction[index, 0] = _float_or_nan(
+            record.get("saturation_fraction")
+        )
+
+    grid_shape = config.get("grid_shape")
+    metric_grid = np.empty((0, 0), dtype=np.float64)
+    if isinstance(grid_shape, list) and len(grid_shape) == 2:
+        metric_grid = np.full(tuple(int(value) for value in grid_shape), np.nan)
+        for index in range(total):
+            if np.isfinite(row[index, 0]) and np.isfinite(col[index, 0]):
+                metric_grid[int(row[index, 0]), int(col[index, 0])] = metric_value[index, 0]
+
+    roi_xywh = config.get("roi_xywh", [])
+    successful_count = sum(status == "ok" for status in statuses)
+    payload: dict[str, object] = {
+        "mat_export_version": np.int32(1),
+        "scan_id": str(config.get("scan_id", "")),
+        "scan_type": str(config.get("scan_type", "")),
+        "device_mode": str(config.get("device_mode", "")),
+        "position_meaning": str(config.get("position_meaning", "")),
+        "coordinate_axis_order": _string_column(["X", "Y", "Z"]),
+        "point_id": point_id,
+        "order_index": order_index,
+        "row": row,
+        "col": col,
+        "target_xyz_mm": target_xyz,
+        "actual_xyz_mm": actual_xyz,
+        "camera_xy_mm": camera_xy,
+        "position_source": _string_column(position_sources),
+        "status": _string_column(statuses),
+        "error_message": _string_column(errors),
+        "timestamp_utc": _string_column(timestamps),
+        "image_relative_path": _string_column(filenames),
+        "image_file_exists": image_file_exists,
+        "metric_name": str(config.get("metric", "")),
+        "metric_value": metric_value,
+        "metric_grid": metric_grid,
+        "roi_mean": roi_mean,
+        "roi_sum": roi_sum,
+        "image_max": image_max,
+        "saturation_fraction": saturation_fraction,
+        "roi_xywh": np.asarray(roi_xywh, dtype=np.int64).reshape(1, -1),
+        "horizontal_axis": str(config.get("horizontal_axis") or ""),
+        "vertical_axis": str(config.get("vertical_axis") or ""),
+        "horizontal_values_mm": np.asarray(
+            config.get("horizontal_values", []), dtype=np.float64
+        ).reshape(1, -1),
+        "vertical_values_mm": np.asarray(
+            config.get("vertical_values", []), dtype=np.float64
+        ).reshape(1, -1),
+        "fixed_axis": str(config.get("fixed_axis") or ""),
+        "fixed_value_mm": _float_or_nan(config.get("fixed_value_mm")),
+        "total_point_count": np.int64(total),
+        "successful_point_count": np.int64(successful_count),
+        "missing_success_image_count": np.int64(
+            sum(
+                statuses[index] == "ok" and image_file_exists[index, 0] == 0
+                for index in range(total)
+            )
+        ),
+        "raw_images_embedded": np.uint8(0),
+        "raw_image_format": "TIFF",
+        "config_json": json.dumps(config, ensure_ascii=False),
+        "mat_created_time_utc": utc_now(),
+    }
+    output = session.directory / "scan_data.mat"
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=".scan_data_", suffix=".mat", dir=session.directory
+    )
+    os.close(handle)
+    try:
+        savemat(
+            temporary_name,
+            payload,
+            do_compression=True,
+            long_field_names=True,
+        )
+        os.replace(temporary_name, output)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
+    return output

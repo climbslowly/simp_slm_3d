@@ -92,15 +92,18 @@ class SpatialScanController:
         return errors
 
     def _wait_for_motion(self, point: SpatialPoint, timeout_s: float) -> dict[str, float]:
+        self._wait_until_idle(timeout_s, operation=f"point_id={point.point_id} 模拟移动")
+        return self.stage.get_positions()
+
+    def _wait_until_idle(self, timeout_s: float, *, operation: str) -> None:
         deadline = time.monotonic() + timeout_s
         while self.stage.is_moving():
             if self._stop.wait(0.02):
                 self.stage.stop()
-                raise InterruptedError("扫描在模拟移动等待期间停止")
+                raise InterruptedError(f"{operation}等待期间停止")
             if time.monotonic() >= deadline:
                 self.stage.stop()
-                raise TimeoutError(f"point_id={point.point_id} 模拟移动超时")
-        return self.stage.get_positions()
+                raise TimeoutError(f"{operation}超时")
 
     def run(self, plan: SpatialScanPlan) -> Path | None:
         if not self._run_lock.acquire(blocking=False):
@@ -149,22 +152,31 @@ class SpatialScanController:
                 record = manager.save_success(
                     point=point, actual_mm=actual, image=image,
                     camera_model=self.camera.get_model_name(),
+                    camera_positions_mm=self.stage.get_camera_positions(),
                 )
                 completed += 1
                 if self.callbacks.on_point_saved:
                     self.callbacks.on_point_saved(record, image)
                 if self.callbacks.on_progress:
                     self.callbacks.on_progress(completed, plan.total_points)
+            manager.export_mat()
             self._set_state(ScanState.STOPPED if self._stop.is_set() else ScanState.COMPLETED)
             return session
         except InterruptedError:
             if manager is not None and current_point is not None:
                 manager.append_status(point=current_point, status="cancelled", message="运行中的 Mock 操作已取消")
+                manager.export_mat()
             self._set_state(ScanState.STOPPED)
             return manager.session_dir if manager else None
         except Exception as exc:
             if manager is not None and current_point is not None:
                 manager.append_error(point=current_point, message=str(exc))
+                try:
+                    manager.export_mat()
+                except Exception as mat_exc:
+                    raise RuntimeError(
+                        f"扫描失败：{exc}；同时无法导出 scan_data.mat：{mat_exc}"
+                    ) from exc
             self._set_state(ScanState.ERROR)
             raise
         finally:
@@ -176,8 +188,21 @@ class SpatialScanController:
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("扫描或另一移动正在运行，拒绝新移动命令")
         try:
+            self._stop.clear()
             point = SpatialPoint(1, 0, None, None, dict(targets_mm))
             self.stage.move_absolute(targets_mm)
             return self._wait_for_motion(point, timeout_s)
+        finally:
+            self._run_lock.release()
+
+    def manual_move_camera(self, targets_mm: dict[str, float], *, timeout_s: float = 5.0) -> dict[str, float]:
+        """只移动探测相机 Mock XY；空间扫描仍只使用物镜逻辑 XYZ。"""
+        if not self._run_lock.acquire(blocking=False):
+            raise RuntimeError("扫描或另一移动正在运行，拒绝新移动命令")
+        try:
+            self._stop.clear()
+            self.stage.move_camera_absolute(targets_mm)
+            self._wait_until_idle(timeout_s, operation="相机两轴模拟移动")
+            return self.stage.get_camera_positions()
         finally:
             self._run_lock.release()

@@ -13,6 +13,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "device_mode": "MOCK",
     "exposure_ms": 1.0,
     "manual_step_mm": 0.1,
+    "camera_manual_step_mm": 0.1,
     "scan_type": "XY",
     "horizontal_start": -0.4,
     "horizontal_stop": 0.4,

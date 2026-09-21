@@ -1,7 +1,7 @@
 # Dimension Camera
 
 维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.2 + GUI-M1**：
-硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV 保存和自动测试已经建立；
+硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV/MAT 保存和自动测试已经建立；
 本轮增加了单位隔离、能力/标定模型、真实运动 safety gate、dry-run 和只读接入 SOP。
 现已增加 **GUI-M1**：PySide6 + pyqtgraph 的离线 Mock 空间扫描、原始 TIFF 保存、联动浏览、
 暂停/继续/停止和历史目录回读。真实硬件行为仍保持原安全边界，GUI-M1 不加载或连接真实设备。
@@ -185,8 +185,25 @@ cd C:\slm_3d\dimension_camera
 .\.venv\Scripts\python.exe -m gui.app --open "output\gui_m1\<scan_directory>"
 ```
 
+GUI-M1 现按五轴机构拆成两组光学逻辑坐标：
+
+| GUI 坐标 | 控制器轴 | 光学角色 | 实验室物理轴 |
+|---|---:|---|---|
+| 探测相机 X | 1 | 垂直光传播平面 transverse x | Y |
+| 探测相机 Y | 2 | 垂直光传播平面 transverse y | Z |
+| 探测物镜 X | 3 | 垂直光传播平面 transverse x | Y |
+| 探测物镜 Y | 5 | 垂直光传播平面 transverse y | Z |
+| 探测物镜 Z | 4 | 光传播方向 | X |
+
+当前扫描计划只使用物镜逻辑 XYZ；相机 XY 是扫描前的固定定位轴，扫描运行时被锁定。
+该轴号映射来自操作者提供的信息，已写入 `scan_config.json` 和 `scan_data.mat` 的
+`config_json`；**各轴正负方向、控制器轴号和实际机械方向仍未实机验证**。Mock 图像用
+“物镜横向位置 − 相机位置”模拟相对位移，不代表真实光学响应。
+
 GUI-M1 的二维 raster 约定为 `heatmap[row, col] = [纵轴, 横轴]`，图像变换把像素中心对齐到
 计划坐标。主图的零值、未采集 `NaN` 和错误日志互不混淆；选点只浏览数据，不提交移动。
+每次扫描结束生成 `scan_data.mat`，其中包含坐标、状态、ROI 指标矩阵和 TIFF 相对路径；
+原始像素仍只保存在 TIFF，避免重复占用空间。旧目录可用 `scripts/export_scan_mat.py` 补导出。
 完整人工验收步骤见 [GUI_M1_ACCEPTANCE.md](GUI_M1_ACCEPTANCE.md)。
 
 ## 只读验证真实位移台
@@ -311,9 +328,9 @@ plan = ScanPlan.from_range(
 ```
 
 当前测试覆盖 Range/List 配置、多维图片总数、Mock 位移与停止、Mock uint16 光斑、两相机
-完整扫描、TIFF/JSON/CSV、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
+完整扫描、TIFF/JSON/CSV/MAT、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
 dry-run 位置/存储/行程检查，以及 GUI-M1 空间计划、保存回读、取消语义和离屏 Qt 构造。
-当前结果：`37 passed`。
+当前结果：`41 passed`。
 
 ## 下一步（进入真实硬件 GUI 前）
 

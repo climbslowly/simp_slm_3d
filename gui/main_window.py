@@ -28,6 +28,16 @@ STATE_TEXT = {
     ScanState.COMPLETED: "已完成", ScanState.ERROR: "错误",
 }
 
+OBJECTIVE_AXIS_TEXT = {
+    "X": "X（轴3 · 物理Y）",
+    "Y": "Y（轴5 · 物理Z）",
+    "Z": "Z（轴4 · 光传播/物理X）",
+}
+CAMERA_AXIS_TEXT = {
+    "X": "X（轴1 · 物理Y）",
+    "Y": "Y（轴2 · 物理Z）",
+}
+
 
 class Bridge(QtCore.QObject):
     state = QtCore.Signal(object)
@@ -57,14 +67,17 @@ class MoveWorker(QtCore.QObject):
     done = QtCore.Signal(object)
     failed = QtCore.Signal(str)
 
-    def __init__(self, controller: SpatialScanController, targets: dict[str, float]) -> None:
+    def __init__(self, controller: SpatialScanController, targets: dict[str, float], group: str) -> None:
         super().__init__()
-        self.controller, self.targets = controller, targets
+        self.controller, self.targets, self.group = controller, targets, group
 
     @QtCore.Slot()
     def run(self) -> None:
         try:
-            self.done.emit(self.controller.manual_move(self.targets))
+            if self.group == "camera":
+                self.done.emit(self.controller.manual_move_camera(self.targets))
+            else:
+                self.done.emit(self.controller.manual_move(self.targets))
         except Exception as exc:
             self.failed.emit(str(exc))
         finally:
@@ -95,7 +108,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stage.connect()
         self.camera = MockCamera(
             serial_number="MOCK-GUI-001", shape=(256, 320), seed=20260920,
-            position_provider=self.stage.get_positions, capture_delay_s=0.025,
+            position_provider=self.stage.get_signal_positions, capture_delay_s=0.025,
         )
         self.camera.connect()
         self.bridge = Bridge()
@@ -119,7 +132,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connect_signals()
         self._update_scan_labels()
         self._set_state(ScanState.IDLE)
-        self._update_position(self.stage.get_positions())
+        self._update_all_positions()
         if config_error:
             self.error_label.setText(config_error)
 
@@ -133,12 +146,13 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter = QtWidgets.QSplitter()
         root.addWidget(splitter, 1)
         left_scroll = QtWidgets.QScrollArea(widgetResizable=True)
+        left_scroll.setMinimumWidth(500)
         left = QtWidgets.QWidget()
         self.left_layout = QtWidgets.QVBoxLayout(left)
         left_scroll.setWidget(left)
         splitter.addWidget(left_scroll)
         splitter.addWidget(self._build_right())
-        splitter.setSizes([420, 1050])
+        splitter.setSizes([520, 950])
         self._build_device_group()
         self._build_manual_group()
         self._build_scan_group()
@@ -150,7 +164,7 @@ class MainWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("设备（安全 Mock）")
         form = QtWidgets.QFormLayout(box)
         form.addRow("当前模式", QtWidgets.QLabel("MOCK（真实硬件入口未接入）"))
-        form.addRow("位移台", QtWidgets.QLabel("MockXYZStage · mock_simulated"))
+        form.addRow("位移台", QtWidgets.QLabel("MockFiveAxisStage · 相机2轴 + 物镜3轴"))
         form.addRow("扫描相机", QtWidgets.QLabel("MOCK-GUI-001 · Mono16"))
         self.exposure = spin(float(self.config["exposure_ms"]), minimum=0.01, maximum=10000, decimals=3)
         self.exposure.setSuffix(" ms")
@@ -158,12 +172,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_layout.addWidget(box)
 
     def _build_manual_group(self) -> None:
-        box = QtWidgets.QGroupBox("模拟位置与单步")
+        box = QtWidgets.QGroupBox("探测物镜 XYZ（扫描坐标）")
         grid = QtWidgets.QGridLayout(box)
         self.position_labels: dict[str, QtWidgets.QLabel] = {}
         self.target_spins: dict[str, QtWidgets.QDoubleSpinBox] = {}
         for column, axis in enumerate(("X", "Y", "Z")):
-            grid.addWidget(QtWidgets.QLabel(axis), 0, column + 1, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            header = QtWidgets.QLabel(OBJECTIVE_AXIS_TEXT[axis])
+            header.setWordWrap(True)
+            grid.addWidget(header, 0, column + 1, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
             label = QtWidgets.QLabel("0.0000 mm")
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.position_labels[axis] = label
@@ -178,6 +194,7 @@ class MainWindow(QtWidgets.QMainWindow):
             minus = QtWidgets.QPushButton(f"{axis}−")
             plus = QtWidgets.QPushButton(f"{axis}+")
             minus.setAutoRepeat(False); plus.setAutoRepeat(False)
+            minus.setText(f"{axis}-")
             minus.clicked.connect(lambda _=False, a=axis: self._jog(a, -1))
             plus.clicked.connect(lambda _=False, a=axis: self._jog(a, 1))
             grid.addWidget(minus, 3, column + 1); grid.addWidget(plus, 4, column + 1)
@@ -189,10 +206,53 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_button = QtWidgets.QPushButton("移动到目标（Mock）")
         self.move_button.clicked.connect(self._move_to_targets)
         grid.addWidget(self.move_button, 6, 1, 1, 3)
-        note = QtWidgets.QLabel("* 仅为 Mock 模拟位置，不是编码器反馈")
+        note = QtWidgets.QLabel("* 仅为 Mock 模拟位置；轴号映射由操作者提供，正负方向尚未实机验证")
+        note.setWordWrap(True)
         note.setStyleSheet("color:#a85d00")
         grid.addWidget(note, 7, 0, 1, 4)
         self.left_layout.addWidget(box)
+
+        camera_box = QtWidgets.QGroupBox("探测相机 XY（固定定位，不参与扫描计划）")
+        camera_grid = QtWidgets.QGridLayout(camera_box)
+        self.camera_position_labels: dict[str, QtWidgets.QLabel] = {}
+        self.camera_target_spins: dict[str, QtWidgets.QDoubleSpinBox] = {}
+        for column, axis in enumerate(("X", "Y")):
+            header = QtWidgets.QLabel(CAMERA_AXIS_TEXT[axis])
+            header.setWordWrap(True)
+            camera_grid.addWidget(header, 0, column + 1, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+            label = QtWidgets.QLabel("0.0000 mm")
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.camera_position_labels[axis] = label
+            camera_grid.addWidget(label, 1, column + 1)
+        camera_grid.addWidget(QtWidgets.QLabel("当前位置*"), 1, 0)
+        self.camera_manual_step = spin(
+            float(self.config["camera_manual_step_mm"]), minimum=0.0001, maximum=100, decimals=4
+        )
+        self.camera_manual_step.setSuffix(" mm")
+        camera_grid.addWidget(QtWidgets.QLabel("步长"), 2, 0)
+        camera_grid.addWidget(self.camera_manual_step, 2, 1, 1, 2)
+        self.camera_jog_buttons: list[QtWidgets.QPushButton] = []
+        for column, axis in enumerate(("X", "Y")):
+            minus = QtWidgets.QPushButton(f"{axis}−")
+            plus = QtWidgets.QPushButton(f"{axis}+")
+            minus.setAutoRepeat(False); plus.setAutoRepeat(False)
+            minus.setText(f"{axis}-")
+            minus.clicked.connect(lambda _=False, a=axis: self._camera_jog(a, -1))
+            plus.clicked.connect(lambda _=False, a=axis: self._camera_jog(a, 1))
+            camera_grid.addWidget(minus, 3, column + 1); camera_grid.addWidget(plus, 4, column + 1)
+            self.camera_jog_buttons.extend([minus, plus])
+            target = spin(0.0)
+            self.camera_target_spins[axis] = target
+            camera_grid.addWidget(target, 5, column + 1)
+        camera_grid.addWidget(QtWidgets.QLabel("绝对目标"), 5, 0)
+        self.camera_move_button = QtWidgets.QPushButton("相机移动到目标（Mock）")
+        self.camera_move_button.clicked.connect(self._move_camera_to_targets)
+        camera_grid.addWidget(self.camera_move_button, 6, 1, 1, 2)
+        camera_note = QtWidgets.QLabel("* 扫描期间锁定；Mock 光斑使用物镜横向位置 − 相机位置")
+        camera_note.setWordWrap(True)
+        camera_note.setStyleSheet("color:#a85d00")
+        camera_grid.addWidget(camera_note, 7, 0, 1, 3)
+        self.left_layout.addWidget(camera_box)
 
     def _build_scan_group(self) -> None:
         box = QtWidgets.QGroupBox("扫描计划")
@@ -329,9 +389,9 @@ class MainWindow(QtWidgets.QMainWindow):
         plane = kind in PLANE_AXES
         is_list = kind.endswith("list")
         if plane:
-            h, v = PLANE_AXES[kind]; self.axis1_label.setText(f"{h} 起/止/步长"); self.axis2_label.setText(f"{v} 起/止/步长")
+            h, v = PLANE_AXES[kind]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[h]} 起/止/步长"); self.axis2_label.setText(f"{OBJECTIVE_AXIS_TEXT[v]} 起/止/步长")
         else:
-            axis = kind[0]; self.axis1_label.setText(f"{axis} 起/止/步长"); self.axis2_label.setText("第二扫描轴（单轴不使用）")
+            axis = kind[0]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[axis]} 起/止/步长"); self.axis2_label.setText("第二扫描轴（单轴不使用）")
         for widget in self.axis2: widget.setEnabled(plane)
         for widget in self.axis1: widget.setVisible(not is_list)
         self.axis1_label.setVisible(not is_list)
@@ -364,7 +424,7 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             plan = self._plan_from_controls()
             raw_bytes = plan.total_points * self.camera.image_shape[0] * self.camera.image_shape[1] * 2
-            self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV 开销）")
+            self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV/MAT 开销）")
             self.start_button.setEnabled(self._thread is None)
         except Exception as exc:
             self.plan_summary.setText(f"参数错误：{exc}")
@@ -394,6 +454,8 @@ class MainWindow(QtWidgets.QMainWindow):
         for item in self.scan_inputs: item.setEnabled(not locked)
         for button in self.jog_buttons: button.setEnabled(not locked)
         self.move_button.setEnabled(not locked)
+        for button in self.camera_jog_buttons: button.setEnabled(not locked)
+        self.camera_move_button.setEnabled(not locked)
         self.open_button.setEnabled(not locked)
         self.start_button.setEnabled(not locked)
         self.pause_button.setEnabled(locked); self.resume_button.setEnabled(locked); self.stop_button.setEnabled(locked)
@@ -412,7 +474,17 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(object)
     def _update_position(self, positions: dict[str, float]) -> None:
         for axis, value in positions.items():
-            self.position_labels[axis].setText(f"{value:.4f} mm")
+            if axis in self.position_labels:
+                self.position_labels[axis].setText(f"{value:.4f} mm")
+
+    def _update_camera_position(self, positions: dict[str, float]) -> None:
+        for axis, value in positions.items():
+            if axis in self.camera_position_labels:
+                self.camera_position_labels[axis].setText(f"{value:.4f} mm")
+
+    def _update_all_positions(self) -> None:
+        self._update_position(self.stage.get_positions())
+        self._update_camera_position(self.stage.get_camera_positions())
 
     @QtCore.Slot(object, object)
     def _on_point_saved(self, record: dict[str, object], image: np.ndarray) -> None:
@@ -548,31 +620,42 @@ class MainWindow(QtWidgets.QMainWindow):
         if selected: self.output_edit.setText(selected)
 
     def _jog(self, axis: str, sign: int) -> None:
-        targets = self.stage.get_positions(); targets[axis] += sign * self.manual_step.value(); self._start_move(targets)
+        targets = self.stage.get_positions(); targets[axis] += sign * self.manual_step.value(); self._start_move(targets, group="objective")
+
+    def _camera_jog(self, axis: str, sign: int) -> None:
+        targets = self.stage.get_camera_positions(); targets[axis] += sign * self.camera_manual_step.value(); self._start_move(targets, group="camera")
 
     def _move_to_targets(self) -> None:
-        self._start_move({axis: item.value() for axis, item in self.target_spins.items()})
+        self._start_move({axis: item.value() for axis, item in self.target_spins.items()}, group="objective")
 
-    def _start_move(self, targets: dict[str, float]) -> None:
+    def _move_camera_to_targets(self) -> None:
+        self._start_move({axis: item.value() for axis, item in self.camera_target_spins.items()}, group="camera")
+
+    def _start_move(self, targets: dict[str, float], *, group: str) -> None:
         if self._move_thread is not None or self._thread is not None: self._on_failed("设备忙，拒绝移动命令"); return
         for button in self.jog_buttons: button.setEnabled(False)
         self.move_button.setEnabled(False)
-        thread = QtCore.QThread(self); worker = MoveWorker(self.controller, targets); worker.moveToThread(thread)
+        for button in self.camera_jog_buttons: button.setEnabled(False)
+        self.camera_move_button.setEnabled(False)
+        thread = QtCore.QThread(self); worker = MoveWorker(self.controller, targets, group); worker.moveToThread(thread)
         thread.started.connect(worker.run); worker.done.connect(self._move_done); worker.failed.connect(self._on_failed)
         worker.done.connect(thread.quit); worker.failed.connect(thread.quit); thread.finished.connect(worker.deleteLater); thread.finished.connect(self._move_thread_done)
         self._move_thread, self._move_worker = thread, worker; thread.start()
 
-    def _move_done(self, positions: dict[str, float]) -> None: self._update_position(positions)
+    def _move_done(self, _positions: dict[str, float]) -> None: self._update_all_positions()
 
     def _move_thread_done(self) -> None:
         if self._move_thread: self._move_thread.deleteLater()
         self._move_thread = None
         for button in self.jog_buttons: button.setEnabled(True)
         self.move_button.setEnabled(True)
+        for button in self.camera_jog_buttons: button.setEnabled(True)
+        self.camera_move_button.setEnabled(True)
 
     def _config_from_controls(self) -> dict[str, object]:
         return {
             "schema_version": 1, "device_mode": "MOCK", "exposure_ms": self.exposure.value(), "manual_step_mm": self.manual_step.value(),
+            "camera_manual_step_mm": self.camera_manual_step.value(),
             "scan_type": self.scan_type.currentText(), "horizontal_start": self.axis1[0].value(), "horizontal_stop": self.axis1[1].value(), "horizontal_step": self.axis1[2].value(),
             "vertical_start": self.axis2[0].value(), "vertical_stop": self.axis2[1].value(), "vertical_step": self.axis2[2].value(), "fixed_value_mm": self.fixed.value(),
             "settling_ms": self.settling.value(), "roi_xywh": [item.value() for item in self.roi_spins], "metric": self.metric_combo.currentText(),

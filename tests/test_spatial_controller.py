@@ -5,6 +5,7 @@ import time
 
 import numpy as np
 import tifffile
+from scipy.io import loadmat
 
 from data.spatial_session import SpatialSession, roi_metrics
 from mock.mock_camera import MockCamera
@@ -16,7 +17,7 @@ from scan.spatial_scan import SpatialScanPlan
 
 def make_devices(*, speed=1000.0, capture_delay=0.0):
     stage = MockXYZStage(speed_mm_s=speed); stage.connect()
-    camera = MockCamera(shape=(32, 40), seed=7, position_provider=stage.get_positions, capture_delay_s=capture_delay); camera.connect()
+    camera = MockCamera(shape=(32, 40), seed=7, position_provider=stage.get_signal_positions, capture_delay_s=capture_delay); camera.connect()
     return stage, camera
 
 
@@ -36,6 +37,7 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     assert controller.state is ScanState.COMPLETED
     assert session_dir is not None
     assert len(list(session_dir.glob("Camera_*/*.tif"))) == 15
+    assert (session_dir / "scan_data.mat").is_file()
     with (session_dir / "scan_log.csv").open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 15 and {row["status"] for row in rows} == {"ok"}
@@ -46,16 +48,38 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     assert np.isclose(recomputed["metric_value"], float(session.successful_records[7]["metric_value"]))
     config = json.loads((session_dir / "scan_config.json").read_text(encoding="utf-8"))
     assert config["device_mode"] == "MOCK" and config["stage"]["real_motion_enabled"] is False
+    assert config["stage"]["axis_mapping"]["objective"]["Y"]["controller_axis"] == 5
+    assert config["stage"]["direction_sign_verified"] is False
+    assert {row["camera_x_mm"] for row in rows} == {"0.0"}
+    assert {row["camera_y_mm"] for row in rows} == {"0.0"}
+    matlab = loadmat(session_dir / "scan_data.mat", squeeze_me=True)
+    assert matlab["scan_id"] == config["scan_id"]
+    assert matlab["target_xyz_mm"].shape == (15, 3)
+    assert matlab["actual_xyz_mm"].shape == (15, 3)
+    assert matlab["camera_xy_mm"].shape == (15, 2)
+    assert np.allclose(matlab["camera_xy_mm"], 0.0)
+    assert matlab["metric_value"].shape == (15,)
+    assert matlab["metric_grid"].shape == (3, 5)
+    assert np.isclose(matlab["metric_grid"][1, 2], float(rows[7]["metric_value"]))
+    assert int(matlab["successful_point_count"]) == 15
+    assert int(matlab["missing_success_image_count"]) == 0
+    assert np.all(matlab["image_file_exists"] == 1)
+    assert int(matlab["raw_images_embedded"]) == 0
 
 
 def _stop_in_state(tmp_path, wanted: ScanState, *, speed=1000.0, settling=0.0, capture_delay=0.0):
     stage, camera = make_devices(speed=speed, capture_delay=capture_delay)
     seen = threading.Event()
+    result: dict[str, object] = {}
     controller = SpatialScanController(stage, camera, SpatialCallbacks(on_state=lambda state: seen.set() if state is wanted else None))
     plan = make_plan(tmp_path, settling=settling)
-    thread = threading.Thread(target=lambda: controller.run(plan))
+    thread = threading.Thread(target=lambda: result.setdefault("directory", controller.run(plan)))
     thread.start(); assert seen.wait(2); controller.request_stop(); thread.join(2)
     assert not thread.is_alive() and controller.state is ScanState.STOPPED
+    directory = result["directory"]
+    assert (directory / "scan_data.mat").is_file()
+    matlab = loadmat(directory / "scan_data.mat", squeeze_me=True)
+    assert int(matlab["successful_point_count"]) < plan.total_points
     return stage.move_command_count
 
 

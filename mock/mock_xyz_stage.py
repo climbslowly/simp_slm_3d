@@ -1,4 +1,8 @@
-"""仅供 GUI-M1 使用的线程安全三轴模拟位移台。"""
+"""GUI-M1 的线程安全五轴模拟位移台。
+
+兼容原有物镜 ``X/Y/Z`` API，同时增加探测相机 ``X/Y``。这里的 X/Y/Z 是
+光学逻辑坐标；控制器轴号及实验室物理轴映射只作为已报告、待实机确认的元数据。
+"""
 
 from __future__ import annotations
 
@@ -8,13 +12,32 @@ import time
 
 
 class MockXYZStage:
+    """五轴 Mock；类名保留以兼容已有 GUI-M1 代码和历史测试。"""
+
     axes = ("X", "Y", "Z")
+    camera_axes = ("X", "Y")
+    _OBJECTIVE_KEYS = {"X": "objective_X", "Y": "objective_Y", "Z": "objective_Z"}
+    _CAMERA_KEYS = {"X": "camera_X", "Y": "camera_Y"}
+
+    # 映射来自操作者描述；正负方向、控制器配置和机械行程尚未实机验证。
+    AXIS_MAPPING = {
+        "camera": {
+            "X": {"controller_axis": 1, "optical_role": "transverse_x", "physical_axis": "Y"},
+            "Y": {"controller_axis": 2, "optical_role": "transverse_y", "physical_axis": "Z"},
+        },
+        "objective": {
+            "X": {"controller_axis": 3, "optical_role": "transverse_x", "physical_axis": "Y"},
+            "Y": {"controller_axis": 5, "optical_role": "transverse_y", "physical_axis": "Z"},
+            "Z": {"controller_axis": 4, "optical_role": "propagation", "physical_axis": "X"},
+        },
+    }
 
     def __init__(self, *, speed_mm_s: float = 20.0) -> None:
         if not math.isfinite(speed_mm_s) or speed_mm_s <= 0:
             raise ValueError("Mock 速度必须是有限正数")
         self._speed = float(speed_mm_s)
-        self._positions = {axis: 0.0 for axis in self.axes}
+        keys = (*self._CAMERA_KEYS.values(), *self._OBJECTIVE_KEYS.values())
+        self._positions = {key: 0.0 for key in keys}
         self._starts = dict(self._positions)
         self._targets = dict(self._positions)
         self._motion_start = 0.0
@@ -48,19 +71,41 @@ class MockXYZStage:
         fraction = min(1.0, max(0.0, fraction))
         self._positions = {
             axis: self._starts[axis] + fraction * (self._targets[axis] - self._starts[axis])
-            for axis in self.axes
+            for axis in self._positions
         }
 
-    def get_positions(self) -> dict[str, float]:
+    def _group_positions(self, keys: dict[str, str]) -> dict[str, float]:
         self._require_connected()
         with self._lock:
             self._update()
-            return dict(self._positions)
+            return {axis: self._positions[key] for axis, key in keys.items()}
 
-    def move_absolute(self, targets_mm: dict[str, float]) -> None:
+    def get_positions(self) -> dict[str, float]:
+        """返回物镜逻辑 X/Y/Z；保留原有扫描控制器接口。"""
+        return self._group_positions(self._OBJECTIVE_KEYS)
+
+    def get_camera_positions(self) -> dict[str, float]:
+        return self._group_positions(self._CAMERA_KEYS)
+
+    def get_all_positions(self) -> dict[str, dict[str, float]]:
+        return {"camera": self.get_camera_positions(), "objective": self.get_positions()}
+
+    def get_signal_positions(self) -> dict[str, float]:
+        """生成 Mock 光斑的位置：物镜横向位置相对探测相机位置。"""
         self._require_connected()
-        if set(targets_mm) != set(self.axes):
-            raise ValueError("三轴移动必须同时给出 X/Y/Z 目标")
+        with self._lock:
+            self._update()
+            return {
+                "X": self._positions["objective_X"] - self._positions["camera_X"],
+                "Y": self._positions["objective_Y"] - self._positions["camera_Y"],
+                "Z": self._positions["objective_Z"],
+            }
+
+    def _move_group_absolute(self, targets_mm: dict[str, float], keys: dict[str, str], group_name: str) -> None:
+        self._require_connected()
+        if set(targets_mm) != set(keys):
+            expected = "/".join(keys)
+            raise ValueError(f"{group_name}移动必须同时给出 {expected} 目标")
         if not all(math.isfinite(float(value)) for value in targets_mm.values()):
             raise ValueError("目标位置必须是有限数值")
         with self._lock:
@@ -68,19 +113,37 @@ class MockXYZStage:
             if time.monotonic() < self._motion_end:
                 raise RuntimeError("Mock 位移台忙，拒绝堆积新的移动命令")
             self._starts = dict(self._positions)
-            self._targets = {axis: float(targets_mm[axis]) for axis in self.axes}
-            distance = max(abs(self._targets[a] - self._starts[a]) for a in self.axes)
+            self._targets = dict(self._positions)
+            for axis, key in keys.items():
+                self._targets[key] = float(targets_mm[axis])
+            distance = max(abs(self._targets[key] - self._starts[key]) for key in keys.values())
             self._motion_start = time.monotonic()
             self._motion_end = self._motion_start + distance / self._speed
             self.move_command_count += 1
+
+    def move_absolute(self, targets_mm: dict[str, float]) -> None:
+        """移动物镜逻辑 X/Y/Z。"""
+        self._move_group_absolute(targets_mm, self._OBJECTIVE_KEYS, "物镜三轴")
+
+    def move_camera_absolute(self, targets_mm: dict[str, float]) -> None:
+        """移动探测相机逻辑 X/Y。"""
+        self._move_group_absolute(targets_mm, self._CAMERA_KEYS, "相机两轴")
 
     def move_axis_relative(self, axis: str, delta_mm: float) -> None:
         positions = self.get_positions()
         axis = axis.upper()
         if axis not in self.axes:
-            raise ValueError("轴必须是 X、Y 或 Z")
+            raise ValueError("物镜轴必须是 X、Y 或 Z")
         positions[axis] += float(delta_mm)
         self.move_absolute(positions)
+
+    def move_camera_axis_relative(self, axis: str, delta_mm: float) -> None:
+        positions = self.get_camera_positions()
+        axis = axis.upper()
+        if axis not in self.camera_axes:
+            raise ValueError("相机轴必须是 X 或 Y")
+        positions[axis] += float(delta_mm)
+        self.move_camera_absolute(positions)
 
     def is_moving(self) -> bool:
         self._require_connected()
@@ -98,9 +161,14 @@ class MockXYZStage:
 
     def device_info(self) -> dict[str, object]:
         return {
-            "adapter": type(self).__name__,
+            "adapter": "MockFiveAxisStage",
             "mode": "MOCK",
             "position_source": "mock_simulated",
             "unit": "mm (simulation only)",
             "real_motion_enabled": False,
+            "axis_mapping_status": "user_reported_axis_identity; direction_sign_unverified",
+            "direction_sign_verified": False,
+            "axis_mapping": self.AXIS_MAPPING,
+            "camera_positions_mm_at_scan_start": self.get_camera_positions(),
+            "objective_positions_mm_at_scan_start": self.get_positions(),
         }
