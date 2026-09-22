@@ -1,6 +1,6 @@
 # Dimension Camera 项目交接摘要
 
-更新时间：2026-09-22  
+更新时间：2026-09-22
 交接基线：`main` / `d7e39bf feat: add layered hardware diagnostics`
 
 本文件供新的 Codex 对话快速恢复上下文。开始工作前仍应读取实际代码、`git status`、
