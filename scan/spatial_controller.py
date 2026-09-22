@@ -76,6 +76,7 @@ class SpatialScanController:
             errors.append("Mock 位移台未连接")
         if not self.camera.is_connected:
             errors.append("Mock 相机未连接")
+        errors.extend(plan.boundary_errors())
         x, y, width, height = plan.roi_xywh
         if x + width > image_shape[1] or y + height > image_shape[0]:
             errors.append(f"ROI {plan.roi_xywh} 超出原图范围 {image_shape[1]}×{image_shape[0]}")

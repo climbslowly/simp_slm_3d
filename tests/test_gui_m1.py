@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -28,6 +29,8 @@ def test_gui_constructs_mock_only_without_hardware(tmp_path: Path) -> None:
         assert any("轴5-" in text and "物理+Z" in text for text in label_texts)
         assert any("轴4+" in text and "逆光" in text for text in label_texts)
         assert window.camera_move_button.text().startswith("相机移动")
+        window._set_raw_colormap("gray")
+        assert window.raw_item.getColorMap().name == "gray"
         before = window.stage.move_command_count
         window._plan = window._plan_from_controls()
         window._records[1] = {"point_id": 1}
@@ -56,6 +59,32 @@ def test_corrupt_configuration_is_preserved(tmp_path: Path) -> None:
     config, error = load_config(path)
     assert config["device_mode"] == DEFAULT_CONFIG["device_mode"] == "MOCK"
     assert error and path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_boundary_configuration_is_validated_and_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "configuration.json"
+    payload = dict(DEFAULT_CONFIG)
+    payload["objective_scan_bounds_mm"] = {"X": [-1, 1], "Y": [-2, 2], "Z": [-3, 3]}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    config, error = load_config(path)
+    assert error is None
+    assert config["objective_scan_bounds_mm"]["Z"] == [-3.0, 3.0]
+
+
+def test_gui_disables_start_when_plan_exceeds_configured_boundary(tmp_path: Path) -> None:
+    path = tmp_path / "configuration.json"
+    payload = dict(DEFAULT_CONFIG)
+    payload["objective_scan_bounds_mm"] = {"X": [-0.1, 0.1], "Y": [-0.1, 0.1], "Z": [-0.1, 0.1]}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(config_path=path)
+    try:
+        window._refresh_estimate()
+        assert not window.start_button.isEnabled()
+        assert "安全边界阻止扫描" in window.plan_summary.text()
+        assert "物镜 X" in window.plan_summary.text()
+    finally:
+        window.close(); app.processEvents()
 
 
 def test_gui_reopens_saved_raw_image(tmp_path: Path) -> None:

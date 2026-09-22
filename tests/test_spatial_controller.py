@@ -4,6 +4,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 import tifffile
 from scipy.io import loadmat
 
@@ -120,3 +121,19 @@ def test_zero_signal_is_distinct_from_unacquired() -> None:
     assert roi_metrics(image, (0, 0, 5, 4), "mean")["metric_value"] == 0.0
     grid = np.full((2, 2), np.nan); grid[0, 0] = 0.0
     assert grid[0, 0] == 0 and np.isnan(grid[0, 1])
+
+
+def test_preflight_rejects_plan_outside_configured_boundary(tmp_path) -> None:
+    stage, camera = make_devices()
+    controller = SpatialScanController(stage, camera)
+    plan = SpatialScanPlan.from_plane(
+        plane="XY", horizontal_start=-0.4, horizontal_stop=0.4, horizontal_step=0.2,
+        vertical_start=0, vertical_stop=0, vertical_step=1, fixed_value_mm=0,
+        objective_bounds_mm={"X": [-0.3, 0.3], "Y": [-1, 1], "Z": [-1, 1]},
+        save_root=tmp_path, settling_time_s=0, roi_xywh=(5, 4, 20, 16),
+    )
+    problems = controller.preflight(plan, image_shape=camera.image_shape)
+    assert any("物镜 X" in problem and "超出软件边界" in problem for problem in problems)
+    with pytest.raises(ValueError, match="超出软件边界"):
+        controller.run(plan)
+    assert stage.move_command_count == 0

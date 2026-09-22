@@ -63,6 +63,7 @@ class SpatialScanPlan:
     vertical_values: list[float] = field(default_factory=list)
     fixed_axis: str | None = None
     fixed_value_mm: float | None = None
+    objective_bounds_mm: dict[str, list[float]] | None = None
 
     def __post_init__(self) -> None:
         self.save_root = Path(self.save_root)
@@ -89,6 +90,16 @@ class SpatialScanPlan:
                 raise ValueError("每个空间点必须包含 X/Y/Z 三个目标")
             if not all(math.isfinite(value) for value in point.targets_mm.values()):
                 raise ValueError("空间目标必须是有限数值")
+        if self.objective_bounds_mm is not None:
+            if set(self.objective_bounds_mm) != set(AXES):
+                raise ValueError("物镜扫描边界必须完整包含 X/Y/Z")
+            for axis in AXES:
+                bounds = self.objective_bounds_mm[axis]
+                if len(bounds) != 2:
+                    raise ValueError(f"物镜 {axis} 边界必须是 [min, max]")
+                lower, upper = map(float, bounds)
+                if not math.isfinite(lower) or not math.isfinite(upper) or lower >= upper:
+                    raise ValueError(f"物镜 {axis} 边界必须是有限数值且 min < max")
 
     @property
     def total_points(self) -> int:
@@ -103,6 +114,22 @@ class SpatialScanPlan:
         if not self.is_plane:
             return None
         return (len(self.vertical_values), len(self.horizontal_values))
+
+    def boundary_errors(self) -> list[str]:
+        """返回超出已配置软件边界的计划范围；不自动修改用户请求。"""
+        if self.objective_bounds_mm is None:
+            return []
+        errors: list[str] = []
+        for axis in AXES:
+            values = [float(point.targets_mm[axis]) for point in self.points]
+            requested_min, requested_max = min(values), max(values)
+            lower, upper = map(float, self.objective_bounds_mm[axis])
+            if requested_min < lower or requested_max > upper:
+                errors.append(
+                    f"物镜 {axis} 计划范围 [{requested_min:g}, {requested_max:g}] mm "
+                    f"超出软件边界 [{lower:g}, {upper:g}] mm"
+                )
+        return errors
 
     @classmethod
     def from_plane(

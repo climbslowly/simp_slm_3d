@@ -53,3 +53,27 @@ def test_single_axis_list_preserves_nonuniform_order(tmp_path) -> None:
     assert plan.scan_type == "AXIS_LIST"
     assert plan.horizontal_values == [0.0, 0.1, 0.35, -0.2]
     assert [point.targets_mm["Z"] for point in plan.points] == plan.horizontal_values
+
+
+def test_configured_boundary_reports_every_out_of_range_axis(tmp_path) -> None:
+    plan = SpatialScanPlan.from_plane(
+        plane="XY", horizontal_start=-0.4, horizontal_stop=0.4, horizontal_step=0.4,
+        vertical_start=-0.2, vertical_stop=0.2, vertical_step=0.2, fixed_value_mm=0.3,
+        objective_bounds_mm={"X": [-0.3, 0.3], "Y": [-0.1, 0.1], "Z": [-0.2, 0.2]},
+        **common(tmp_path),
+    )
+    errors = plan.boundary_errors()
+    assert len(errors) == 3
+    assert any("物镜 X" in error and "[-0.4, 0.4]" in error for error in errors)
+    assert any("物镜 Y" in error for error in errors)
+    assert any("物镜 Z" in error for error in errors)
+
+
+def test_boundary_does_not_clamp_requested_points(tmp_path) -> None:
+    plan = SpatialScanPlan.from_axis_list(
+        axis="X", values=[-0.4, 0.0, 0.4], fixed_positions_mm={"Y": 0, "Z": 0},
+        objective_bounds_mm={"X": [-0.3, 0.3], "Y": [-1, 1], "Z": [-1, 1]},
+        **common(tmp_path),
+    )
+    assert [point.targets_mm["X"] for point in plan.points] == [-0.4, 0.0, 0.4]
+    assert plan.boundary_errors()

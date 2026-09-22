@@ -275,6 +275,20 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.list_label, self.list_values)
         self.fixed = spin(float(self.config["fixed_value_mm"]))
         form.addRow("固定轴位置 (mm)", self.fixed)
+        bounds = self.config.get("objective_scan_bounds_mm")
+        self.boundary_label = QtWidgets.QLabel()
+        self.boundary_label.setWordWrap(True)
+        if bounds is None:
+            self.boundary_label.setText("未配置（Mock 可运行；不得用于解锁真实运动）")
+            self.boundary_label.setStyleSheet("color:#a85d00")
+        else:
+            description = "; ".join(
+                f"{axis}[{float(bounds[axis][0]):g}, {float(bounds[axis][1]):g}]"
+                for axis in ("X", "Y", "Z")
+            )
+            self.boundary_label.setText(f"{description} mm（超限时阻止扫描，不自动截断）")
+            self.boundary_label.setStyleSheet("color:#2d6a4f")
+        form.addRow("物镜软件边界", self.boundary_label)
         self.settling = spin(float(self.config["settling_ms"]), minimum=0, maximum=60000, decimals=1)
         self.settling.setSuffix(" ms")
         form.addRow("稳定等待", self.settling)
@@ -403,6 +417,7 @@ class MainWindow(QtWidgets.QMainWindow):
             save_root=Path(self.output_edit.text()).expanduser(), exposure_us=self.exposure.value() * 1000.0,
             settling_time_s=self.settling.value() / 1000.0, roi_xywh=tuple(item.value() for item in self.roi_spins),
             metric=self.metric_combo.currentText(), experiment_name="gui_mock", camera_serial=self.camera.get_serial_number(),
+            objective_bounds_mm=self.config.get("objective_scan_bounds_mm"),
         )
         kind = self.scan_type.currentText()
         if kind in PLANE_AXES:
@@ -424,9 +439,18 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             plan = self._plan_from_controls()
             raw_bytes = plan.total_points * self.camera.image_shape[0] * self.camera.image_shape[1] * 2
-            self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV/MAT 开销）")
-            self.start_button.setEnabled(self._thread is None)
+            boundary_errors = plan.boundary_errors()
+            if boundary_errors:
+                self.plan_summary.setStyleSheet("color:#d9534f;font-weight:700")
+                self.plan_summary.setText("安全边界阻止扫描：" + "；".join(boundary_errors))
+                self.start_button.setEnabled(False)
+            else:
+                suffix = "；软件边界未配置（仅 Mock）" if plan.objective_bounds_mm is None else "；已通过软件边界检查"
+                self.plan_summary.setStyleSheet("color:#a85d00" if plan.objective_bounds_mm is None else "")
+                self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV/MAT 开销）{suffix}")
+                self.start_button.setEnabled(self._thread is None)
         except Exception as exc:
+            self.plan_summary.setStyleSheet("color:#d9534f;font-weight:700")
             self.plan_summary.setText(f"参数错误：{exc}")
             self.start_button.setEnabled(False)
 
@@ -564,7 +588,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self._select_point(point_id)
 
     def _set_raw_colormap(self, name: str) -> None:
-        self.raw_item.setColorMap(pg.colormap.get(name))
+        if name.casefold() in {"gray", "grey"}:
+            color_map = pg.ColorMap(
+                [0.0, 1.0],
+                [(0, 0, 0, 255), (255, 255, 255, 255)],
+                name="gray",
+            )
+        else:
+            try:
+                color_map = pg.colormap.get(name)
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                color_map = pg.ColorMap(
+                    [0.0, 1.0],
+                    [(0, 0, 0, 255), (255, 255, 255, 255)],
+                    name="gray-fallback",
+                )
+                self.error_label.setText(f"伪彩 {name!r} 不可用，已回退 gray：{exc}")
+        self.raw_item.setColorMap(color_map)
 
     def _update_selection_graphics(self, record: dict[str, object]) -> None:
         x = float(record[f"target_{self._plan.horizontal_axis.lower()}_mm"]) if self._plan and self._plan.horizontal_axis else 0
@@ -660,6 +700,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "vertical_start": self.axis2[0].value(), "vertical_stop": self.axis2[1].value(), "vertical_step": self.axis2[2].value(), "fixed_value_mm": self.fixed.value(),
             "settling_ms": self.settling.value(), "roi_xywh": [item.value() for item in self.roi_spins], "metric": self.metric_combo.currentText(),
             "output_dir": self.output_edit.text(), "colormap": self.raw_colormap.currentText(),
+            "objective_scan_bounds_mm": self.config.get("objective_scan_bounds_mm"),
         }
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:

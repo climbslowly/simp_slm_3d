@@ -47,6 +47,12 @@ GUI 开发阶段再安装：
 .\.venv\Scripts\python.exe -m pip install -r requirements-gui.txt
 ```
 
+需要运行完整自动测试时安装开发依赖；该文件同时包含 GUI 依赖和 `pytest`：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
+
 ## 已确认的位移台控制方式
 
 现有代码不是 Python package，而是 Python `ctypes.CDLL` 直接加载 `GAS.dll`。厂家示例与
@@ -202,6 +208,23 @@ GUI-M1 现按五轴机构拆成两组光学逻辑坐标：
 限位读取和可靠停止接口仍未确认，真实运动入口继续关闭。Mock 图像用“物镜横向位置 − 相机位置”
 模拟相对位移，不代表真实光学响应。
 
+### 可配置扫描软件边界
+
+`configuration.json` 可选配置物镜 GUI 坐标的逐轴扫描边界：
+
+```json
+"objective_scan_bounds_mm": {
+  "X": [-1.0, 1.0],
+  "Y": [-1.0, 1.0],
+  "Z": [-0.5, 0.5]
+}
+```
+
+数值必须由实验电脑现场确认后填写；仓库默认值为 `null`，避免把任意 Mock 数字冒充真实
+安全范围。配置后，扫描计划任一目标点超限都会在“扫描前估算”中显示红色错误并禁用开始按钮，
+控制器 preflight 也会再次拒绝。程序**不会自动截断或替换目标值**，因为静默改变实验轨迹会使
+保存的计划与操作者原始意图不一致。该检查只是软件预检，不能替代控制器限位、物理限位或急停。
+
 GUI-M1 的二维 raster 约定为 `heatmap[row, col] = [纵轴, 横轴]`，图像变换把像素中心对齐到
 计划坐标。主图的零值、未采集 `NaN` 和错误日志互不混淆；选点只浏览数据，不提交移动。
 每次扫描结束生成 `scan_data.mat`，其中包含坐标、状态、ROI 指标矩阵和 TIFF 相对路径；
@@ -326,13 +349,14 @@ plan = ScanPlan.from_range(
 ## 测试
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 当前测试覆盖 Range/List 配置、多维图片总数、Mock 位移与停止、Mock uint16 光斑、两相机
 完整扫描、TIFF/JSON/CSV/MAT、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
-dry-run 位置/存储/行程检查，以及 GUI-M1 空间计划、保存回读、取消语义和离屏 Qt 构造。
-当前结果：`41 passed`。
+dry-run 位置/存储/行程检查，以及 GUI-M1 空间计划、软件边界、保存回读、取消语义和离屏 Qt 构造。
+当前结果：`46 passed`。
 
 ## 下一步（进入真实硬件 GUI 前）
 
