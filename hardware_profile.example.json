@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "dll_path": null,
+  "pc_ip": null,
+  "card_ip": null,
+  "output_dir": "output/hardware_diagnostics",
+  "camera": {
+    "camera_index": null,
+    "exposure_ms": null,
+    "frames": 5,
+    "discard_frames": 1,
+    "capture_timeout_ms": 5000,
+    "post_exposure_settle_ms": 20.0,
+    "inter_frame_delay_ms": 0.0
+  },
+  "axes": {
+    "1": {
+      "label": "探测相机 GUI X",
+      "physical_mapping": "axis1+ -> physical +Y",
+      "pulses_per_mm": null,
+      "travel_min_mm": null,
+      "travel_max_mm": null,
+      "direction_sign": 1,
+      "home_position_mm": null,
+      "soft_limit_min_mm": null,
+      "soft_limit_max_mm": null,
+      "max_single_step_mm": null,
+      "healthy_raw_status_values": []
+    },
+    "2": {
+      "label": "探测相机 GUI Y",
+      "physical_mapping": "axis2+ -> physical -Z",
+      "pulses_per_mm": null,
+      "travel_min_mm": null,
+      "travel_max_mm": null,
+      "direction_sign": -1,
+      "home_position_mm": null,
+      "soft_limit_min_mm": null,
+      "soft_limit_max_mm": null,
+      "max_single_step_mm": null,
+      "healthy_raw_status_values": []
+    },
+    "3": {
+      "label": "探测物镜 GUI X",
+      "physical_mapping": "axis3+ -> physical +Y",
+      "pulses_per_mm": null,
+      "travel_min_mm": null,
+      "travel_max_mm": null,
+      "direction_sign": 1,
+      "home_position_mm": null,
+      "soft_limit_min_mm": null,
+      "soft_limit_max_mm": null,
+      "max_single_step_mm": null,
+      "healthy_raw_status_values": []
+    },
+    "4": {
+      "label": "探测物镜 GUI Z",
+      "physical_mapping": "axis4+ -> physical +X (逆光传播方向/物镜前伸)",
+      "pulses_per_mm": null,
+      "travel_min_mm": null,
+      "travel_max_mm": null,
+      "direction_sign": 1,
+      "home_position_mm": null,
+      "soft_limit_min_mm": null,
+      "soft_limit_max_mm": null,
+      "max_single_step_mm": null,
+      "healthy_raw_status_values": []
+    },
+    "5": {
+      "label": "探测物镜 GUI Y",
+      "physical_mapping": "axis5+ -> physical -Z",
+      "pulses_per_mm": null,
+      "travel_min_mm": null,
+      "travel_max_mm": null,
+      "direction_sign": -1,
+      "home_position_mm": null,
+      "soft_limit_min_mm": null,
+      "soft_limit_max_mm": null,
+      "max_single_step_mm": null,
+      "healthy_raw_status_values": []
+    }
+  }
+}

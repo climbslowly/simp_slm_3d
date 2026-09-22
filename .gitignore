@@ -8,3 +8,5 @@ output/
 data/captures/
 RunTimeLog/
 *.log
+# 实验电脑的真实硬件参数；仓库只保存 hardware_profile.example.json。
+hardware_local.json

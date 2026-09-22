@@ -311,6 +311,17 @@ Reset、清零、使能、Home、Stop 或 Move。相机保持现有配置，只�
 
 ## 完全离线的 scan dry-run
 
+真实相机多帧时序/旧帧诊断、五轴只读快照、运动 readiness audit 和受安全门约束的
+单轴最小运动入口，见 [真实硬件分层诊断](docs/HARDWARE_DIAGNOSTICS.md)。实验电脑的
+现场值写入被 Git 忽略的 `hardware_local.json`，不要改写仓库中的示例文件来保存现场值。
+
+### Git 协作约定
+
+凡是需要在实验电脑验证的代码、脚本、测试或文档，本机安全离线测试通过后应提交并推送，
+同时报告 commit hash 和实验电脑更新命令。提交必须使用精确文件清单，不包含本机
+`configuration.json` 的现场改动、`hardware_local.json`、`output/`、真实实验数据、厂商
+DLL 或未脱敏配置。远端出现非快进或冲突时禁止强推，应先保留现场状态并处理差异。
+
 以下命令只检查数据，不加载 GAS.dll、不连接设备、不创建扫描目录：
 
 ```powershell
@@ -355,8 +366,8 @@ plan = ScanPlan.from_range(
 
 当前测试覆盖 Range/List 配置、多维图片总数、Mock 位移与停止、Mock uint16 光斑、两相机
 完整扫描、TIFF/JSON/CSV/MAT、mm/pulse 转换、标定缺失、越界、未知能力、Fake DLL 只读调用序列、
-dry-run 位置/存储/行程检查，以及 GUI-M1 空间计划、软件边界、保存回读、取消语义和离屏 Qt 构造。
-当前结果：`46 passed`。
+dry-run 位置/存储/行程检查、相机多帧诊断、五轴只读快照与运动 readiness audit，以及
+GUI-M1 空间计划、软件边界、保存回读、取消语义和离屏 Qt 构造。当前结果：`51 passed`。
 
 ## 下一步（进入真实硬件 GUI 前）
 
