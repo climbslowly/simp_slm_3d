@@ -1,7 +1,8 @@
 # Dimension Camera 项目交接摘要
 
 更新时间：2026-09-22
-交接基线：`main` / `d7e39bf feat: add layered hardware diagnostics`
+功能基线：`d7e39bf feat: add layered hardware diagnostics`；开始新对话时以实际
+`main` 最新提交为准（本交接文档由后续文档提交加入）。
 
 本文件供新的 Codex 对话快速恢复上下文。开始工作前仍应读取实际代码、`git status`、
 `README.md` 和本文件引用的安全文档；本摘要不能替代当前工作区事实或真实硬件验证。
@@ -11,8 +12,8 @@
 - 本机工作区：`C:\slm_3d\dimension_camera`
 - 仓库：`https://github.com/climbslowly/simp_slm_3d.git`
 - 当前分支：`main`
-- 当前基线提交：`d7e39bf`
-- `d7e39bf` 时本地 `main` 与 `origin/main` 一致。
+- 当前功能基线提交：`d7e39bf`；交接文档本身位于它之后的文档提交。
+- 交接完成时本地 `main` 与 `origin/main` 一致；新对话必须用实际 Git 状态复核。
 - 交接时本机 `configuration.json` 有一项未提交的本地改动：增加
   `"objective_scan_bounds_mm": null`。这是本机配置，不要擅自覆盖或提交。
 - `hardware_local.json`、`output/`、`data/captures/` 均被 Git 忽略。
@@ -194,6 +195,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 > 请继续当前 `C:\slm_3d\dimension_camera` 项目。先读取
 > `docs/PROJECT_HANDOFF.md`、`README.md`、`docs/HARDWARE_DIAGNOSTICS.md` 和实际 Git
 > 状态；不要覆盖本机 `configuration.json` 或提交 `hardware_local.json`/`output/`。
-> 当前基线为 `d7e39bf`，GUI-M1 Mock 已验收，真实运动仍禁止。请以我随后提供的实验电脑
+> 当前功能基线为 `d7e39bf`，请以实际 `main` 最新提交为准；GUI-M1 Mock 已验收，真实
+> 运动仍禁止。请以我随后提供的实验电脑
 > 诊断结果为准继续工作，不把 Mock/Fake 测试当成实机验证。凡需实验电脑验证的改动，
 > 本机离线测试通过后提交并推送，并报告 commit hash 和更新命令。
