@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import IntFlag
 
 
 class StageSafetyError(RuntimeError):
@@ -16,6 +17,90 @@ class StageSafetyError(RuntimeError):
 
 class UnsupportedStageOperation(NotImplementedError):
     """厂家资料尚未确认某项能力时抛出的异常。"""
+
+
+class AxisStatusFlag(IntFlag):
+    """ETH_GAS_N V7.3 手册 5.6 节定义的 32 位轴状态。"""
+
+    ESTOP = 0x00000001
+    SERVO_ALARM = 0x00000002
+    POSITIVE_SOFT_LIMIT = 0x00000004
+    NEGATIVE_SOFT_LIMIT = 0x00000008
+    FOLLOW_ERROR = 0x00000010
+    POSITIVE_HARD_LIMIT = 0x00000020
+    NEGATIVE_HARD_LIMIT = 0x00000040
+    RESERVED_IO_SMS_STOP = 0x00000080
+    RESERVED_IO_EMG_STOP = 0x00000100
+    ENABLED = 0x00000200
+    RUNNING = 0x00000400
+    ARRIVED = 0x00000800
+    HOME_RUNNING = 0x00001000
+    HOME_SUCCESS = 0x00002000
+    HOME_SWITCH = 0x00004000
+    INDEX = 0x00008000
+    GEAR_START = 0x00010000
+    GEAR_FINISH = 0x00020000
+
+
+AXIS_STATUS_SAFETY_FAULTS: tuple[tuple[AxisStatusFlag, str], ...] = (
+    (AxisStatusFlag.ESTOP, "急停状态有效"),
+    (AxisStatusFlag.SERVO_ALARM, "驱动器报警"),
+    (AxisStatusFlag.POSITIVE_SOFT_LIMIT, "正软限位触发"),
+    (AxisStatusFlag.NEGATIVE_SOFT_LIMIT, "负软限位触发"),
+    (AxisStatusFlag.FOLLOW_ERROR, "规划位置与实际位置跟随误差过大"),
+    (AxisStatusFlag.POSITIVE_HARD_LIMIT, "正硬限位触发"),
+    (AxisStatusFlag.NEGATIVE_HARD_LIMIT, "负硬限位触发"),
+    (AxisStatusFlag.RESERVED_IO_SMS_STOP, "手册保留状态位 0x00000080 置位"),
+    (AxisStatusFlag.RESERVED_IO_EMG_STOP, "手册保留状态位 0x00000100 置位"),
+)
+
+
+def decode_axis_status(raw_status: int) -> dict[str, object]:
+    """把 raw status 解码为可审计字段，不把 HOME 信号等信息位当成故障。"""
+
+    unsigned = raw_status & 0xFFFFFFFF
+    active_flags = [flag.name for flag in AxisStatusFlag if unsigned & int(flag)]
+    safety_faults = [
+        message for flag, message in AXIS_STATUS_SAFETY_FAULTS if unsigned & int(flag)
+    ]
+    known_mask = 0
+    for flag in AxisStatusFlag:
+        known_mask |= int(flag)
+    return {
+        "raw_decimal": raw_status,
+        "raw_hex": f"0x{unsigned:08X}",
+        "active_flags": active_flags,
+        "unknown_bits_hex": f"0x{unsigned & ~known_mask & 0xFFFFFFFF:08X}",
+        "safety_faults": safety_faults,
+        "enabled": bool(unsigned & AxisStatusFlag.ENABLED),
+        "running": bool(unsigned & AxisStatusFlag.RUNNING),
+        "arrived": bool(unsigned & AxisStatusFlag.ARRIVED),
+        "home_running": bool(unsigned & AxisStatusFlag.HOME_RUNNING),
+        "home_success": bool(unsigned & AxisStatusFlag.HOME_SUCCESS),
+        "home_switch": bool(unsigned & AxisStatusFlag.HOME_SWITCH),
+        "positive_limit_active": bool(
+            unsigned
+            & (AxisStatusFlag.POSITIVE_SOFT_LIMIT | AxisStatusFlag.POSITIVE_HARD_LIMIT)
+        ),
+        "negative_limit_active": bool(
+            unsigned
+            & (AxisStatusFlag.NEGATIVE_SOFT_LIMIT | AxisStatusFlag.NEGATIVE_HARD_LIMIT)
+        ),
+    }
+
+
+def axis_status_motion_errors(raw_status: int) -> list[str]:
+    """返回开始新运动前必须阻塞的实时状态。"""
+
+    decoded = decode_axis_status(raw_status)
+    errors = list(decoded["safety_faults"])
+    if decoded["running"]:
+        errors.append("轴已经处于规划运动状态")
+    if decoded["home_running"]:
+        errors.append("轴正在回零")
+    if decoded["unknown_bits_hex"] != "0x00000000":
+        errors.append(f"轴状态包含手册未定义位 {decoded['unknown_bits_hex']}")
+    return errors
 
 
 @dataclass(frozen=True)
@@ -27,7 +112,9 @@ class StageCapabilities:
     """
 
     position_read_supported: bool | None = None
+    encoder_position_read_supported: bool | None = None
     status_read_supported: bool | None = None
+    soft_limit_read_supported: bool | None = None
     motion_supported: bool | None = None
     stop_supported: bool | None = None
     home_supported: bool | None = None
@@ -46,12 +133,20 @@ class StageCapabilities:
             )
 
 
-# 这些 True 只来自项目中现有厂家 Python 示例。状态位解释、Stop、Home、限位和
-# 多轴启动均没有证据，因此保持 None。
+# 连接/基础运动来自厂家 Python 示例；状态、Stop、限位、编码器位置和启动 mask 来自
+# 《博派科技 ETH_GAS_N 运动控制卡用户手册 V7.3》。Home API 虽已记录，但当前机构的
+# 回零模式、方向和现场流程尚未验收，因此仍保持 unknown。
 CURRENT_GAS_CAPABILITIES = StageCapabilities(
     position_read_supported=True,
+    encoder_position_read_supported=True,
     status_read_supported=True,
     motion_supported=True,
+    stop_supported=True,
+    positive_limit_supported=True,
+    negative_limit_supported=True,
+    multi_axis_start_supported=True,
+    status_interpretation_supported=True,
+    soft_limit_read_supported=True,
 )
 
 

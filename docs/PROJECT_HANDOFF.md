@@ -1,8 +1,7 @@
 # Dimension Camera 项目交接摘要
 
-更新时间：2026-09-22
-功能基线：`d7e39bf feat: add layered hardware diagnostics`；开始新对话时以实际
-`main` 最新提交为准（本交接文档由后续文档提交加入）。
+更新时间：2026-09-26
+功能基线：Stage Bring-up V0.3 + GUI-M1；开始新对话时以实际 `main` 最新提交为准。
 
 本文件供新的 Codex 对话快速恢复上下文。开始工作前仍应读取实际代码、`git status`、
 `README.md` 和本文件引用的安全文档；本摘要不能替代当前工作区事实或真实硬件验证。
@@ -12,7 +11,7 @@
 - 本机工作区：`C:\slm_3d\dimension_camera`
 - 仓库：`https://github.com/climbslowly/simp_slm_3d.git`
 - 当前分支：`main`
-- 当前功能基线提交：`d7e39bf`；交接文档本身位于它之后的文档提交。
+- 当前功能基线已包含增强五轴只读诊断；具体提交以 `git log --oneline -1` 为准。
 - 交接完成时本地 `main` 与 `origin/main` 一致；新对话必须用实际 Git 状态复核。
 - 交接时本机 `configuration.json` 有一项未提交的本地改动：增加
   `"objective_scan_bounds_mm": null`。这是本机配置，不要擅自覆盖或提交。
@@ -54,14 +53,14 @@
 - 历史现场结果：实验电脑已成功完成真实相机单帧采集；CXP 枚举成功不等于所有采集与
   触发模式均已验证。
 
-### 分层硬件诊断（提交 `d7e39bf`）
+### 分层硬件诊断（基线 `d7e39bf`，2026-09-26 已取得首轮现场结果）
 
 - `scripts/diagnose_camera_sequence.py`：相机多帧、丢弃帧、耗时、SHA256 和重复帧诊断；
   不访问位移台。
-- `scripts/snapshot_stage_axes.py`：轴 1～5 只读 raw planned pulse/status；不运动。
+- `scripts/snapshot_stage_axes.py`：轴 1～5 增强只读规划/反馈 pulse、软限位和状态；不运动。
 - `scripts/check_motion_readiness.py`：完全离线列出真实运动阻塞项。
 - `scripts/verify_stage_minimal_motion.py`：受完整安全门约束的单轴最小运动入口；当前应在
-  连接硬件前因缺少 Stop、限位和状态解释而拒绝。
+  连接硬件前因 Home 现场流程和逐轴标定等项目未完成而拒绝。
 - 仓库只保存 `hardware_profile.example.json`；实验电脑复制为被忽略的
   `hardware_local.json` 保存现场参数。
 - 完整命令与判读规则见 `docs/HARDWARE_DIAGNOSTICS.md`。
@@ -90,18 +89,19 @@
 
 - `GA_OpenByIP(PCIP, CardIP, 0, 0)` 连接顺序；
 - `GA_GetPrfPos` 可读规划位置 raw pulse；
-- `GA_GetSts` 可读 raw status，但不能解释其 bit；
+- `GA_GetSts` 状态位定义；轴 3 首轮 `0x4000` 是 `HOME_SWITCH`，不是报警或回零成功；
+- `GA_GetAxisEncPos` 反馈计数读取和 `GA_GetSoftLimit` 软限位读取签名；
+- `GA_Stop(mask, option)` 签名和缓停/急停 bit 语义；
+- `GA_Update` 的轴 n mask 为 `1 << (n-1)`；
 - 厂家轴 1 示例出现 AxisOn、PrfTrap、SetTrap、SetPos、SetVel、`GA_Update(1)`；
 - 实验电脑完成过控制器只读连接；五轴身份/方向完成过官方 GUI 人工观察。
 
 仍阻塞：
 
-- `GA_GetSts` bit 定义、健康状态白名单和可靠的运动完成判据；
-- 实际编码器位置 API/语义；
-- Stop API 的准确签名、模式和经过验证的停止方案；
-- 正负限位读取/解释；
-- Home API（若未来需要 Python Home）；
-- 轴 2～5 的启动 mask；
+- 反馈计数是否来自独立物理编码器，以及与规划位置的实机动态对照；
+- Stop 的实机效果和经过验证的独立物理停止方案；
+- 当前机构的 Home 模式、方向、参数与流程；
+- 正负限位接线/极性的现场核对；
 - 轴 2～5 pulse/mm，以及全部轴的零点、行程、软限位和最小安全步长。
 
 证据矩阵见 `docs/DIMENSION_STAGE_EVIDENCE.md`；第一次只读接入 SOP 见
@@ -129,10 +129,10 @@ GUI-M1 已有：
 
 ## 6. 自动验证与不可声称的验证
 
-在提交 `d7e39bf` 上，本机结果为：
+在增强只读诊断版本上，本机结果为：
 
 ```text
-51 passed
+54 passed
 compileall passed
 git diff --check passed（只有 Windows LF/CRLF 提示）
 ```
@@ -140,7 +140,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 这些测试使用 Mock/Fake 设备。它们不证明：
 
 - 真实五轴可以安全运动；
-- Stop/限位/状态 bit 正确；
+- Stop、限位和状态 bit 的真实控制器动态行为已经验收；
 - CXP/USB 相机所有触发和缓存模式正确；
 - GUI 已经接入真实相机或真实位移台。
 
@@ -153,7 +153,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
    git log --oneline -1
    ```
 
-   预期为 `d7e39bf` 或其后续提交。如果实验电脑有本地 `configuration.json` 改动，先只
+   预期为远端 `main` 最新提交。如果实验电脑有本地 `configuration.json` 改动，先只
    stash 该文件，pull 后再 `stash pop`；不要丢弃现场配置。
 
 2. 安装/更新依赖并运行离线测试：
@@ -181,8 +181,8 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 
 优先顺序：
 
-1. 获取实验电脑的相机多帧诊断与五轴只读结果。
-2. 根据厂家资料补齐状态、Stop、限位、启动 mask 和逐轴标定证据。
+1. 运行增强五轴只读快照，取得规划/反馈 pulse、软限位和解码后的状态。
+2. 根据快照补齐逐轴 pulse/mm、零点、行程、限位接线和 Stop 实机证据。
 3. GUI-M2：在保留 Mock 默认模式和真实运动禁用的前提下，把已有 `BaslerCamera` 接入
    当前 GUI，完成设备选择、曝光写入/读回、预览和单点保存。
 4. 独立脚本完成受监督的单轴最小运动验收后，再把验证过的五轴 Adapter 接入 GUI。
@@ -195,7 +195,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 > 请继续当前 `C:\slm_3d\dimension_camera` 项目。先读取
 > `docs/PROJECT_HANDOFF.md`、`README.md`、`docs/HARDWARE_DIAGNOSTICS.md` 和实际 Git
 > 状态；不要覆盖本机 `configuration.json` 或提交 `hardware_local.json`/`output/`。
-> 当前功能基线为 `d7e39bf`，请以实际 `main` 最新提交为准；GUI-M1 Mock 已验收，真实
+> 当前功能基线为 Stage Bring-up V0.3 + GUI-M1，请以实际 `main` 最新提交为准；GUI-M1 Mock 已验收，真实
 > 运动仍禁止。请以我随后提供的实验电脑
 > 诊断结果为准继续工作，不把 Mock/Fake 测试当成实机验证。凡需实验电脑验证的改动，
 > 本机离线测试通过后提交并推送，并报告 commit hash 和更新命令。

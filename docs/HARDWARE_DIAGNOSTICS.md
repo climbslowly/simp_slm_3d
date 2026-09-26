@@ -25,9 +25,10 @@ notepad .\hardware_local.json
 - `inter_frame_delay_ms`：保存帧之间的额外等待；
 - `frames`：保存的诊断帧数，不包含丢弃帧。
 
-位移台每轴的 `travel_*`、`home_position_mm`、`max_single_step_mm`、健康 raw status
-白名单都必须来自现场记录或厂家资料。`direction_sign` 和文字映射来自已经记录的人工方向
-观察，但它们不能替代行程、零点、状态位、Stop 和限位验证。
+位移台每轴的 `travel_*`、`home_position_mm` 和 `max_single_step_mm` 必须来自现场记录或
+厂家资料。旧配置中的 `healthy_raw_status_values` 仅为向后兼容保留，当前安全门已经依据
+ETH_GAS_N V7.3 手册逐位判断状态。`direction_sign` 和文字映射来自已经记录的人工方向观察，
+但它们不能替代逐轴 pulse/mm、行程和零点验证。
 
 ## 2. 相机多帧诊断（不访问位移台）
 
@@ -61,9 +62,23 @@ TIFF，`camera_diagnostic.json` 记录曝光、抓帧耗时、shape、dtype、�
   --confirm-read-only
 ```
 
-程序对每个轴只执行 DLL load、connect、`GA_GetPrfPos`、`GA_GetSts`、disconnect。
-报告保留 raw pulse 和 raw status，不猜测状态 bit，不调用 AxisOn、Home、Move、Stop、
-Zero 或限位测试。
+程序对每个轴只执行 DLL load、connect，并读取：
+
+- `GA_GetPrfPos`：规划位置，单位 pulse；
+- `GA_GetAxisEncPos`：编码器/反馈计数位置，单位 pulse；
+- `GA_GetSts`：轴状态，并按 ETH_GAS_N V7.3 手册 5.6 节逐位解释；
+- `GA_GetSoftLimit`：控制器当前配置的正负软限位，单位 pulse。
+
+报告还给出规划位置与反馈计数位置之差。新增读取失败时会记录
+`optional_read_errors`，不会丢失已经成功取得的状态。脚本不调用 AxisOn、Home、Move、
+Stop、Zero、清报警、设置限位或任何其他状态修改 API；报告中的
+`motion_commanded` 和 `state_changing_api_called` 都应为 `false`。
+
+状态位中 `ESTOP`、`SERVO_ALARM`、正负软/硬限位、`FOLLOW_ERROR` 和被置位的手册保留位
+属于安全阻塞项。
+`HOME_SWITCH` 只表示零位输入当前有效，不等于 `HOME_SUCCESS`，也不应单独解释为故障。
+首次增强快照重点检查：五轴读取是否全部成功、是否出现安全阻塞位、反馈与规划位置是否一致、
+以及控制器软限位是否与现场配置吻合。
 
 ## 4. 真实运动离线安全审计
 
@@ -73,8 +88,9 @@ Zero 或限位测试。
 ```
 
 此命令不加载 DLL、不连接设备、不移动。每个 `BLOCKED` 都是进入受监督最小运动前必须
-解决的项目。当前项目仍缺 Stop API、限位读取、状态解释等证据，因此返回退出码 2 是预期
-结果，不是测试程序故障。
+解决的项目。状态位、Stop 签名、限位解释和轴启动 mask 已有手册依据；当前仍会因自动
+Home 流程未验收、逐轴标定/零点/行程和 `max_single_step_mm` 不完整而返回退出码 2。
+这是预期结果，不是测试程序故障。
 
 ## 5. 单轴最小运动入口
 
@@ -87,8 +103,8 @@ Zero 或限位测试。
   --delta-mm 0.001
 ```
 
-当前版本应在访问硬件前被安全门拒绝。只有代码中的厂家能力、完整逐轴标定、机械/软件
-范围、健康状态白名单和 `max_single_step_mm` 全部确认后，程序才可能进入执行分支。
+当前版本应在访问硬件前被安全门拒绝。只有完整逐轴标定、机械/软件范围、零点、现场回零
+流程和 `max_single_step_mm` 全部确认后，程序才可能进入执行分支。
 不要通过改脚本或伪造配置绕过 `BLOCKED`。未来获准执行时还必须显式提供
 `--execute-supervised-motion` 与 `--confirm-physical-stop-ready`，并在终端再次手工输入精确
 目标确认文字。
@@ -101,7 +117,7 @@ Zero 或限位测试。
 - 使用的 Git commit；
 - 命令行完整输出；
 - 相机报告中的抓帧耗时和重复帧计数；
-- 五轴 raw pulse/status；
+- 五轴规划/反馈 pulse、控制器软限位、解码后的状态及可选读取错误；
 - readiness audit 的全部 `BLOCKED` 项。
 
 这些本地输出已被 Git 忽略；需要分析时单独发送相关 JSON、截图或压缩包。

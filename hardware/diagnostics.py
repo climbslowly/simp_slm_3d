@@ -17,7 +17,7 @@ import tifffile
 from .camera_base import CameraBase
 from .diagnostic_profile import CameraDiagnosticSettings
 from .dimension_stage import DimensionStage, DimensionStageConfig
-from .stage_safety import AxisCalibration
+from .stage_safety import AxisCalibration, decode_axis_status
 
 
 def _utc_now() -> str:
@@ -163,7 +163,7 @@ def read_stage_axes_snapshot(
     axes: Iterable[int],
     stage_factory: StageFactory = DimensionStage,
 ) -> dict[str, object]:
-    """逐轴建立只读会话，读取规划位置和未解释的 raw status。"""
+    """逐轴建立只读会话，读取规划/反馈位置、软限位和已定义状态位。"""
 
     results: list[dict[str, object]] = []
     for axis_id in axes:
@@ -180,16 +180,41 @@ def read_stage_axes_snapshot(
         try:
             stage.load_library()
             stage.connect()
+            planned_position = stage.get_position_pulse()
             raw_status = stage.read_raw_status()
             item.update(
                 {
                     "status": "ok",
-                    "planned_position_raw_pulse": stage.get_position_pulse(),
+                    "planned_position_raw_pulse": planned_position,
                     "raw_status_decimal": raw_status,
                     "raw_status_hex": f"0x{raw_status & 0xFFFFFFFF:08X}",
-                    "raw_status_interpretation": "UNKNOWN",
+                    "status_interpretation": decode_axis_status(raw_status),
                 }
             )
+            optional_errors: list[str] = []
+            try:
+                item["encoder_position_raw_pulse"] = (
+                    stage.get_encoder_position_pulse()
+                )
+                item["planned_minus_encoder_pulse"] = (
+                    planned_position - float(item["encoder_position_raw_pulse"])
+                )
+            except Exception as exc:
+                optional_errors.append(
+                    f"GA_GetAxisEncPos: {type(exc).__name__}: {exc}"
+                )
+            try:
+                positive, negative = stage.get_soft_limits_pulse()
+                item["controller_soft_limits_raw_pulse"] = {
+                    "positive": positive,
+                    "negative": negative,
+                }
+            except Exception as exc:
+                optional_errors.append(
+                    f"GA_GetSoftLimit: {type(exc).__name__}: {exc}"
+                )
+            if optional_errors:
+                item["optional_read_errors"] = optional_errors
         except Exception as exc:
             item.update(
                 {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
@@ -201,12 +226,13 @@ def read_stage_axes_snapshot(
                 item["disconnect_error"] = f"{type(exc).__name__}: {exc}"
         results.append(item)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "operation": "five_axis_read_only_snapshot",
         "captured_utc": _utc_now(),
         "pc_ip": pc_ip,
         "card_ip": card_ip,
         "motion_commanded": False,
+        "state_changing_api_called": False,
         "axes": results,
     }
 

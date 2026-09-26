@@ -1,4 +1,4 @@
-"""轴 1..5 只读快照；不调用任何运动、使能、清零或 Home API。"""
+"""轴 1..5 增强只读快照；不调用任何运动、使能、清零或 Home API。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _parse_axes(text: str) -> list[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Dimension/GAS 多轴只读快照；不调用任何运动 API"
+        description="Dimension/GAS 多轴增强只读快照；不调用任何状态修改或运动 API"
     )
     parser.add_argument(
         "--config", type=Path, default=Path("hardware_local.json")
@@ -51,14 +51,26 @@ def main() -> None:
     )
     for item in report["axes"]:
         if item["status"] == "ok":
+            interpretation = item["status_interpretation"]
+            assert isinstance(interpretation, dict)
             print(
-                f"axis {item['axis_id']}: pulse={item['planned_position_raw_pulse']}, "
-                f"raw_status={item['raw_status_decimal']} ({item['raw_status_hex']})"
+                f"axis {item['axis_id']}: planned={item['planned_position_raw_pulse']} pulse, "
+                f"encoder={item.get('encoder_position_raw_pulse', 'READ_ERROR')} pulse, "
+                f"raw_status={item['raw_status_decimal']} ({item['raw_status_hex']}), "
+                f"flags={interpretation['active_flags']}"
             )
+            soft_limits = item.get("controller_soft_limits_raw_pulse")
+            if soft_limits is not None:
+                print(f"  controller_soft_limits_raw_pulse={soft_limits}")
+            if interpretation["safety_faults"]:
+                print(f"  SAFETY_FAULTS={interpretation['safety_faults']}")
+            for error in item.get("optional_read_errors", []):
+                print(f"  OPTIONAL_READ_ERROR: {error}")
         else:
             print(f"axis {item['axis_id']}: ERROR {item['error']}")
-    print("raw_status interpretation = UNKNOWN; no bits were interpreted")
+    print("raw_status interpretation = ETH_GAS_N V7.3 section 5.6")
     print("motion_commanded = False")
+    print("state_changing_api_called = False")
     print(f"report = {report_path.resolve()}")
 
 

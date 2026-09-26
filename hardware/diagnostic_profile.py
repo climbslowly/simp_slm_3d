@@ -67,6 +67,7 @@ class AxisDiagnosticSettings:
     soft_limit_min_mm: float | None = None
     soft_limit_max_mm: float | None = None
     max_single_step_mm: float | None = None
+    # 旧版配置兼容字段。状态安全门现已改为按厂家手册逐位判断，不再使用完整值白名单。
     healthy_raw_status_values: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:

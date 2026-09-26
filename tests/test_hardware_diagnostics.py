@@ -105,10 +105,16 @@ class FakeReadOnlyStage:
         return float(self.config.calibration.axis_id * 100)
 
     def read_raw_status(self) -> int:
-        return 7
+        return 0x4000 if self.config.calibration.axis_id == 3 else 0
+
+    def get_encoder_position_pulse(self) -> float:
+        return float(self.config.calibration.axis_id * 100 - 1)
+
+    def get_soft_limits_pulse(self) -> tuple[int, int]:
+        return (260000, -260000)
 
 
-def test_five_axis_snapshot_is_read_only_and_keeps_raw_status(tmp_path: Path) -> None:
+def test_five_axis_snapshot_is_read_only_and_decodes_status(tmp_path: Path) -> None:
     report = read_stage_axes_snapshot(
         dll_path=tmp_path / "GAS.dll",
         pc_ip="192.0.2.10",
@@ -124,7 +130,23 @@ def test_five_axis_snapshot_is_read_only_and_keeps_raw_status(tmp_path: Path) ->
         400.0,
         500.0,
     ]
-    assert all(item["raw_status_interpretation"] == "UNKNOWN" for item in report["axes"])
+    assert report["schema_version"] == 2
+    assert report["state_changing_api_called"] is False
+    assert [item["encoder_position_raw_pulse"] for item in report["axes"]] == [
+        99.0,
+        199.0,
+        299.0,
+        399.0,
+        499.0,
+    ]
+    assert report["axes"][2]["status_interpretation"]["active_flags"] == [
+        "HOME_SWITCH"
+    ]
+    assert all(
+        item["controller_soft_limits_raw_pulse"]
+        == {"positive": 260000, "negative": -260000}
+        for item in report["axes"]
+    )
 
 
 def test_motion_readiness_audit_blocks_unknown_safety_evidence(tmp_path: Path) -> None:
@@ -133,5 +155,6 @@ def test_motion_readiness_audit_blocks_unknown_safety_evidence(tmp_path: Path) -
     profile = load_hardware_diagnostic_profile(path)
     errors = readiness_for_axis(profile, 1)
     assert "dll_path 未配置" in errors
-    assert any("Stop API" in error for error in errors)
+    assert not any("Stop API" in error for error in errors)
+    assert any("Home API" in error for error in errors)
     assert any("机械行程" in error or "轴标定" in error for error in errors)

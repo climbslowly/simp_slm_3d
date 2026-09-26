@@ -11,6 +11,8 @@ from hardware.stage_safety import (
     StageCapabilities,
     StageSafetyError,
     UnsupportedStageOperation,
+    axis_status_motion_errors,
+    decode_axis_status,
 )
 
 
@@ -32,16 +34,24 @@ class FakeFunction:
         self.implementation = implementation
         self.argtypes: list[object] = []
         self.restype: object | None = None
+        self.arguments: list[tuple[object, ...]] = []
 
     def __call__(self, *args: object) -> int:
         self.calls.append(self.name)
+        self.arguments.append(args)
         if self.implementation is not None:
             return self.implementation(*args)
         return 0
 
 
 class FakeGasDll:
-    def __init__(self, position_pulse: float = 1234.0, raw_status: int = 7) -> None:
+    def __init__(
+        self,
+        position_pulse: float = 1234.0,
+        raw_status: int = 0,
+        encoder_position_pulse: float = 1233.0,
+        soft_limits_pulse: tuple[int, int] = (260000, -260000),
+    ) -> None:
         self.calls: list[str] = []
 
         def get_position(_axis: object, pointer: Any, *_: object) -> int:
@@ -52,12 +62,30 @@ class FakeGasDll:
             pointer._obj.value = raw_status
             return 0
 
+        def get_encoder_position(_axis: object, pointer: Any, *_: object) -> int:
+            pointer._obj.value = encoder_position_pulse
+            return 0
+
+        def get_soft_limits(
+            _axis: object, positive_pointer: Any, negative_pointer: Any
+        ) -> int:
+            positive_pointer._obj.value = soft_limits_pulse[0]
+            negative_pointer._obj.value = soft_limits_pulse[1]
+            return 0
+
         self.GA_OpenByIP = FakeFunction("GA_OpenByIP", self.calls)
         self.GA_Close = FakeFunction("GA_Close", self.calls)
         self.GA_GetPrfPos = FakeFunction(
             "GA_GetPrfPos", self.calls, get_position
         )
         self.GA_GetSts = FakeFunction("GA_GetSts", self.calls, get_status)
+        self.GA_GetAxisEncPos = FakeFunction(
+            "GA_GetAxisEncPos", self.calls, get_encoder_position
+        )
+        self.GA_GetSoftLimit = FakeFunction(
+            "GA_GetSoftLimit", self.calls, get_soft_limits
+        )
+        self.GA_Stop = FakeFunction("GA_Stop", self.calls)
         self.GA_AxisOn = FakeFunction("GA_AxisOn", self.calls)
         self.GA_PrfTrap = FakeFunction("GA_PrfTrap", self.calls)
         self.GA_SetTrapPrmSingle = FakeFunction(
@@ -81,7 +109,9 @@ class FakeDimensionStage(DimensionStage):
 def fully_confirmed_capabilities() -> StageCapabilities:
     return StageCapabilities(
         position_read_supported=True,
+        encoder_position_read_supported=True,
         status_read_supported=True,
+        soft_limit_read_supported=True,
         motion_supported=True,
         stop_supported=True,
         home_supported=True,
@@ -182,10 +212,8 @@ def test_range_violation_blocks_motion_before_motion_api() -> None:
     assert "GA_Update" not in fake.calls
 
 
-def test_unknown_capability_blocks_unsupported_operation() -> None:
+def test_unknown_home_capability_blocks_unsupported_operation() -> None:
     stage = DimensionStage(DimensionStageConfig(dll_path=gas_dll()))
-    with pytest.raises(UnsupportedStageOperation, match="unknown"):
-        stage.stop()
     with pytest.raises(UnsupportedStageOperation, match="unknown"):
         stage.home()
 
@@ -207,6 +235,67 @@ def test_read_only_session_never_calls_motion_functions() -> None:
     assert stage.read_raw_status() == 0x1234
     stage.disconnect()
     assert fake.calls == ["GA_OpenByIP", "GA_GetPrfPos", "GA_GetSts", "GA_Close"]
+
+
+def test_extended_read_only_values_use_documented_apis() -> None:
+    fake = FakeGasDll(
+        position_pulse=321.5,
+        encoder_position_pulse=320.25,
+        soft_limits_pulse=(260000, -260000),
+    )
+    stage = FakeDimensionStage(
+        DimensionStageConfig(
+            dll_path=gas_dll(),
+            **connection_values(),
+            calibration=AxisCalibration(axis_id=3),
+        ),
+        fake,
+    )
+    stage.connect()
+    assert stage.get_encoder_position_pulse() == pytest.approx(320.25)
+    assert stage.get_soft_limits_pulse() == (260000, -260000)
+    stage.disconnect()
+    assert fake.calls == [
+        "GA_OpenByIP",
+        "GA_GetAxisEncPos",
+        "GA_GetSoftLimit",
+        "GA_Close",
+    ]
+
+
+def test_status_decoder_distinguishes_home_signal_from_faults() -> None:
+    home = decode_axis_status(0x00004000)
+    assert home["active_flags"] == ["HOME_SWITCH"]
+    assert home["home_switch"] is True
+    assert home["safety_faults"] == []
+    assert axis_status_motion_errors(0x00004000) == []
+
+    blocked = decode_axis_status(0x00000022)
+    assert blocked["positive_limit_active"] is True
+    assert blocked["safety_faults"] == ["驱动器报警", "正硬限位触发"]
+
+    reserved_errors = axis_status_motion_errors(0x00000180)
+    assert "手册保留状态位 0x00000080 置位" in reserved_errors
+    assert "手册保留状态位 0x00000100 置位" in reserved_errors
+
+
+def test_update_and_stop_use_axis_bit_mask() -> None:
+    fake = FakeGasDll()
+    stage = FakeDimensionStage(
+        DimensionStageConfig(
+            dll_path=gas_dll(),
+            **connection_values(),
+            calibration=AxisCalibration(axis_id=3),
+        ),
+        fake,
+    )
+    stage.connect()
+    stage._command_absolute_pulse(10)
+    stage.stop()
+    stage.emergency_stop()
+    stage.disconnect()
+    assert fake.GA_Update.arguments[-1] == (4,)
+    assert fake.GA_Stop.arguments == [(4, 0), (4, 4)]
 
 
 def test_real_motion_is_opt_in_and_default_calibration_unknown() -> None:

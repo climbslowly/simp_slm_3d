@@ -1,7 +1,8 @@
 """维度/固高运动控制器 GAS.dll 的安全 Adapter。
 
 坐标分为三层：上层扫描只使用物理坐标 mm；GAS 控制器使用 pulse/count；最底层
-才是 ctypes DLL 调用。尚未确认的 Stop、Home、限位和状态 bit 不会被猜测执行。
+才是 ctypes DLL 调用。已按手册实现的 Stop、限位读取和状态 bit 仍保留实机验收边界；
+尚未确认现场流程的 Home 不会被猜测执行。
 """
 
 from __future__ import annotations
@@ -15,10 +16,13 @@ from pathlib import Path
 from .stage_base import StageBase
 from .stage_safety import (
     CURRENT_GAS_CAPABILITIES,
+    AxisStatusFlag,
     AxisCalibration,
     StageCapabilities,
     StageSafetyError,
     UnsupportedStageOperation,
+    axis_status_motion_errors,
+    decode_axis_status,
 )
 
 
@@ -39,8 +43,8 @@ class StageAccessLevel(IntEnum):
 class DimensionStageConfig:
     """真实位移台连接、标定和运动安全配置。
 
-    ``healthy_raw_status_values`` 只能依据官方状态文档填写。它是完整 raw status 的
-    白名单，不是我们猜测的 bit mask。默认 None 会阻止一切真实运动。
+    ``healthy_raw_status_values`` 是旧配置兼容字段；当前安全门依据厂家手册逐位判断，
+    不再要求 raw status 完整值与某个固定白名单完全相等。
     """
 
     dll_path: Path
@@ -111,7 +115,7 @@ class DimensionStage(StageBase):
 
     @staticmethod
     def _bind_confirmed_api(dll: ctypes.CDLL) -> None:
-        """仅绑定厂家示例已给出调用形式的函数。"""
+        """仅绑定厂家示例或 ETH_GAS_N V7.3 手册已确认签名的函数。"""
         dll.GA_OpenByIP.argtypes = [
             ctypes.c_char_p,
             ctypes.c_char_p,
@@ -125,16 +129,31 @@ class DimensionStage(StageBase):
             ctypes.c_short,
             ctypes.POINTER(ctypes.c_double),
             ctypes.c_short,
-            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_ulong),
         ]
         dll.GA_GetPrfPos.restype = ctypes.c_int
         dll.GA_GetSts.argtypes = [
             ctypes.c_short,
             ctypes.POINTER(ctypes.c_long),
             ctypes.c_short,
-            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_ulong),
         ]
         dll.GA_GetSts.restype = ctypes.c_int
+        dll.GA_GetAxisEncPos.argtypes = [
+            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_double),
+            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        dll.GA_GetAxisEncPos.restype = ctypes.c_int
+        dll.GA_GetSoftLimit.argtypes = [
+            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_long),
+            ctypes.POINTER(ctypes.c_long),
+        ]
+        dll.GA_GetSoftLimit.restype = ctypes.c_int
+        dll.GA_Stop.argtypes = [ctypes.c_long, ctypes.c_long]
+        dll.GA_Stop.restype = ctypes.c_int
         dll.GA_AxisOn.argtypes = [ctypes.c_short]
         dll.GA_AxisOn.restype = ctypes.c_int
         dll.GA_PrfTrap.argtypes = [ctypes.c_short]
@@ -218,11 +237,51 @@ class DimensionStage(StageBase):
         position_pulse = ctypes.c_double(0.0)
         self._check(
             dll.GA_GetPrfPos(
-                self._axis_id(), ctypes.byref(position_pulse), 1, 0
+                self._axis_id(), ctypes.byref(position_pulse), 1, None
             ),
             "GA_GetPrfPos",
         )
         return position_pulse.value
+
+    def get_encoder_position_pulse(self) -> float:
+        """读取编码器/反馈计数位置原值；不改变当前编码器计数模式。"""
+
+        self.config.capabilities.require(
+            "encoder_position_read_supported", "读取编码器位置"
+        )
+        dll = self._require_connected()
+        position_pulse = ctypes.c_double(0.0)
+        self._check(
+            dll.GA_GetAxisEncPos(
+                self._axis_id(), ctypes.byref(position_pulse), 1, None
+            ),
+            "GA_GetAxisEncPos",
+        )
+        return position_pulse.value
+
+    def get_encoder_position_mm(self) -> float:
+        """用已确认标定将编码器/反馈计数位置转换为物理 mm。"""
+
+        return self.config.calibration.pulse_to_mm(
+            self.get_encoder_position_pulse()
+        )
+
+    def get_soft_limits_pulse(self) -> tuple[int, int]:
+        """只读控制器当前配置的正、负软限位，单位 pulse。"""
+
+        self.config.capabilities.require(
+            "soft_limit_read_supported", "读取控制器软限位"
+        )
+        dll = self._require_connected()
+        positive = ctypes.c_long(0)
+        negative = ctypes.c_long(0)
+        self._check(
+            dll.GA_GetSoftLimit(
+                self._axis_id(), ctypes.byref(positive), ctypes.byref(negative)
+            ),
+            "GA_GetSoftLimit",
+        )
+        return int(positive.value), int(negative.value)
 
     def get_position_mm(self) -> float:
         """读取控制器规划位置并用已确认标定转换为物理 mm。"""
@@ -238,15 +297,20 @@ class DimensionStage(StageBase):
         return self.get_position_mm()
 
     def read_raw_status(self) -> int:
-        """读取 GA_GetSts 原值，不解释任何 bit。"""
+        """读取 GA_GetSts 原值；需要解释时使用 read_status()/decode_axis_status。"""
         self.config.capabilities.require("status_read_supported", "读取 raw status")
         dll = self._require_connected()
         raw_status = ctypes.c_long(0)
         self._check(
-            dll.GA_GetSts(self._axis_id(), ctypes.byref(raw_status), 1, 0),
+            dll.GA_GetSts(self._axis_id(), ctypes.byref(raw_status), 1, None),
             "GA_GetSts",
         )
         return int(raw_status.value)
+
+    def read_status(self) -> dict[str, object]:
+        """读取并按 ETH_GAS_N V7.3 手册逐位解释轴状态。"""
+
+        return decode_axis_status(self.read_raw_status())
 
     def motion_readiness_errors(self, *, check_live_status: bool) -> list[str]:
         """汇总 Level 2 的全部阻塞项；默认配置必然无法通过。"""
@@ -276,18 +340,12 @@ class DimensionStage(StageBase):
         if axis_id is not None and axis_id != 1:
             if self.config.capabilities.multi_axis_start_supported is not True:
                 errors.append("非轴 1 的 GA_Update mask 尚未确认")
-        if not self.config.healthy_raw_status_values:
-            errors.append("健康 raw status 白名单尚未由官方文档确认")
         if check_live_status:
             if not self._connected:
                 errors.append("控制器尚未连接")
-            elif not errors:
+            else:
                 raw_status = self.read_raw_status()
-                assert self.config.healthy_raw_status_values is not None
-                if raw_status not in self.config.healthy_raw_status_values:
-                    errors.append(
-                        f"控制器 raw status={raw_status} 不在已确认健康白名单中"
-                    )
+                errors.extend(axis_status_motion_errors(raw_status))
         return errors
 
     def _command_absolute_pulse(self, target_pulse: int) -> None:
@@ -312,8 +370,8 @@ class DimensionStage(StageBase):
                 "GA_SetVel",
                 lambda: dll.GA_SetVel(axis_id, self.config.velocity_pulse_per_ms),
             ),
-            # 当前证据只确认轴 1 使用 GA_Update(1)。
-            ("GA_Update", lambda: dll.GA_Update(1)),
+            # ETH_GAS_N V7.3：bit0..bit7 分别启动轴 1..8。
+            ("GA_Update", lambda: dll.GA_Update(1 << (axis_id - 1))),
         )
         for name, call in calls:
             self._check(call(), name)
@@ -351,18 +409,41 @@ class DimensionStage(StageBase):
         self.move_relative_mm(distance)
 
     def is_moving(self) -> bool:
-        # 状态位含义未知时不做 bit 推断；只有 Level 2 获准后该位置判据才会使用。
         if self._last_target_mm is None:
             return False
+        raw_status = self.read_raw_status()
+        decoded = decode_axis_status(raw_status)
+        status_errors = list(decoded["safety_faults"])
+        if decoded["home_running"]:
+            status_errors.append("轴在点位运动期间进入了回零状态")
+        if decoded["unknown_bits_hex"] != "0x00000000":
+            status_errors.append(
+                f"轴状态包含手册未定义位 {decoded['unknown_bits_hex']}"
+            )
+        if status_errors:
+            raise StageSafetyError("运动状态异常：" + "; ".join(status_errors))
+        if decoded["running"]:
+            return True
         pulses_per_mm = self.config.calibration.pulses_per_mm
         if pulses_per_mm is None:
             raise StageSafetyError("pulses_per_mm 未确认，不能判断运动完成")
         tolerance_mm = self.config.position_tolerance_pulse / pulses_per_mm
-        return abs(self.get_position_mm() - self._last_target_mm) > tolerance_mm
+        # 手册 11.6：RUNNING=0 且规划位置与目标差值小于 1 pulse 才算到位。
+        return abs(self.get_position_mm() - self._last_target_mm) >= tolerance_mm
 
     def stop(self) -> None:
         self.config.capabilities.require("stop_supported", "Stop")
-        raise UnsupportedStageOperation("Stop API 签名尚未实现")
+        dll = self._require_connected()
+        mask = 1 << (self._axis_id() - 1)
+        self._check(dll.GA_Stop(mask, 0), "GA_Stop")
+
+    def emergency_stop(self) -> None:
+        """调用控制器规划急停；不能替代独立物理急停或断电手段。"""
+
+        self.config.capabilities.require("stop_supported", "Emergency Stop")
+        dll = self._require_connected()
+        mask = 1 << (self._axis_id() - 1)
+        self._check(dll.GA_Stop(mask, mask), "GA_Stop")
 
     def home(self) -> None:
         self.config.capabilities.require("home_supported", "Home")
@@ -370,11 +451,25 @@ class DimensionStage(StageBase):
 
     def get_positive_limit_active(self) -> bool:
         self.config.capabilities.require("positive_limit_supported", "读取正限位")
-        raise UnsupportedStageOperation("正限位 API 签名尚未实现")
+        raw_status = self.read_raw_status()
+        return bool(
+            raw_status
+            & int(
+                AxisStatusFlag.POSITIVE_SOFT_LIMIT
+                | AxisStatusFlag.POSITIVE_HARD_LIMIT
+            )
+        )
 
     def get_negative_limit_active(self) -> bool:
         self.config.capabilities.require("negative_limit_supported", "读取负限位")
-        raise UnsupportedStageOperation("负限位 API 签名尚未实现")
+        raw_status = self.read_raw_status()
+        return bool(
+            raw_status
+            & int(
+                AxisStatusFlag.NEGATIVE_SOFT_LIMIT
+                | AxisStatusFlag.NEGATIVE_HARD_LIMIT
+            )
+        )
 
     def device_info(self) -> dict[str, object]:
         calibration = self.config.calibration

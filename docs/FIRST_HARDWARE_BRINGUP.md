@@ -20,25 +20,22 @@
 2. 使用人工确认的 PCIP、CardIP 建立连接；
 3. 记录人工确认的轴号；
 4. 调用 `GA_GetPrfPos` 读取 raw planned-position pulse；
-5. 调用 `GA_GetSts` 读取 raw status；
-6. 原样打印数值，不解释状态 bit；
-7. 调用 `GA_Close` 断开。
+5. 调用 `GA_GetAxisEncPos` 读取 raw encoder/feedback pulse；
+6. 调用 `GA_GetSoftLimit` 读取控制器当前软限位；
+7. 调用 `GA_GetSts` 读取 raw status，并按 ETH_GAS_N V7.3 手册解释；
+8. 调用 `GA_Close` 断开。
 
-唯一允许的程序入口是：
+推荐使用增强五轴只读入口：
 
 ```powershell
 cd C:\slm_3d\dimension_camera
-$dllPath = Read-Host "Enter the VERIFIED GAS.dll path"
-$pcIp = Read-Host "Enter the VERIFIED PC adapter IP (PCIP)"
-$cardIp = Read-Host "Enter the VERIFIED motion card IP (CardIP)"
-$axisId = [int](Read-Host "Enter the VERIFIED axis number")
-.\.venv\Scripts\python.exe scripts\verify_stage_readonly.py `
-  --dll $dllPath `
-  --pc-ip $pcIp `
-  --card-ip $cardIp `
-  --axis $axisId `
+.\.venv\Scripts\python.exe scripts\snapshot_stage_axes.py `
+  --config .\hardware_local.json `
+  --axes 1,2,3,4,5 `
   --confirm-read-only
 ```
+
+旧的 `verify_stage_readonly.py` 仍可用于单轴基础检查，但不包含反馈位置、软限位和状态解码。
 
 在运行前复核脚本路径和命令中不存在其他程序。不要运行 `positioner/` 下会循环运动的厂家示例。
 
@@ -57,10 +54,10 @@ Phase A 明确禁止：Reset、Zero、Encoder On/Off、Axis/Servo On、Home、Jo
 - 机械 travel min/max；
 - controller pulse=0 对应的物理 mm 坐标；
 - 正负限位信号定义和当前状态；
-- `GA_GetSts` bit 定义、运动完成和故障判据；
-- Stop API 准确签名、停止模式与已验证的急停方案；
+- 状态位的实机动态变化、规划/反馈位置关系和运动完成判据；
+- Stop 的实机停止效果与已验证的物理急停方案；
 - Home API/流程（如果将使用）；
-- 单轴/多轴 `GA_Update` mask；
+- 单轴/多轴 `GA_Update` mask 已有手册定义，但仍需与现场轴行为核对；
 - 第一次运动目标、速度、加速度和观察人员确认。
 
 Phase B 应另写测试计划，不能通过修改 `allow_motion=True` 临时绕过 safety gate。
@@ -79,8 +76,8 @@ Phase B 应另写测试计划，不能通过修改 `allow_motion=True` 临时绕
 - 操作者无法立即触及急停/断电装置；
 - 任何人对单位、方向、行程或当前机械位置有疑问。
 
-软件异常时不要用未知签名的 `GA_Stop` 做试验。Phase A 本身不应产生运动；若发生意外运动，
-使用已经确认的物理安全手段，而不是临时猜测 API。
+Phase A 不会调用已经实现的 `GA_Stop`，本身也不应产生运动；若发生意外运动，使用已经确认的
+物理安全手段，不把尚未实机验收的 API 当成唯一停止方案。
 
 ## Information to record
 
