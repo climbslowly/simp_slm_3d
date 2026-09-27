@@ -106,7 +106,8 @@ GAS.dll:              controller coordinate, pulse/count
 保留状态位均会阻止运动；`HOME_SWITCH (0x4000)` 只是零位输入，不等于报警或回零成功。手册给出的点位完成
 判据为 `RUNNING=0` 且规划位置距目标小于 1 pulse。`GA_GetPrfPos` 仍表示规划位置，
 `GA_GetAxisEncPos` 表示编码器/反馈计数位置；在未确认现场反馈模式前不声称它一定来自独立
-物理编码器闭环。
+物理编码器闭环。2026-09-27 现场只读结果中五轴反馈值仅为 `0/1`，没有跟随规划位置；
+`GA_GetSoftLimit` 均返回完整 int32 上下界，当前没有可依赖的有限控制器软限位窗口。
 
 ### StageCapabilities 与 AxisCalibration
 
@@ -125,10 +126,10 @@ GAS.dll:              controller coordinate, pulse/count
 - 目标物理轴与官方 GUI 逻辑轴号的对应关系；
 - `PulsPerRev=10000`、`Lead=1`、`Rate=1` 的准确换算公式，以及 pulse 正方向；
 - 目标轴应采用哪一组 `PosLimt` / `NegLimt` 行程；
-- 当前反馈计数模式是否使用独立物理编码器；
+- 当前反馈计数模式为何只返回 `0/1`，以及是否使用独立物理编码器；
 - 当前机构应采用的 Home 模式、方向、速度和最大搜索距离；
 - Stop 的现场实际减速效果及独立物理急停方案；
-- 每轴限位接线、触发极性和软限位配置与机械行程是否一致；
+- 每轴限位接线、触发极性，以及为何控制器软限位仍为完整 int32 范围；
 - 轴 2..5 的 pulse/mm、零点和安全单步。
 
 拿到控制器型号和官方 API 手册后，应优先补齐这些项目。

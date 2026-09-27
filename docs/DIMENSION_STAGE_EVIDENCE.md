@@ -1,6 +1,6 @@
 # Dimension Stage Hardware Evidence Matrix
 
-最后更新：2026-09-26，软件版本：bring-up v0.3 + GUI-M1。
+最后更新：2026-09-27，软件版本：bring-up v0.3 + GUI-M1。
 
 ## 证据规则
 
@@ -24,11 +24,11 @@
 | 64-bit DLL load | confirmed-local | `tests/test_dimension_stage.py`; `positioner/GAS.dll` SHA256 `349014A5F16E9C2DEE28978453AD718DCE52EF52708D7E375AFF7D5D30AF2ED3` 已由 64-bit Python 加载 | allowed, Level 0 |
 | Controller connection | confirmed-hardware-read-only | 厂家 Python 示例调用 `GA_OpenByIP(bytes, bytes, 0, 0)`；实验电脑只读连接成功 | 仅允许 Phase A 只读入口 |
 | PCIP / CardIP | documented in supplied official package | `ComParam.xml` 为 PCIP `192.168.0.200`、CardIP `192.168.0.1`；Python 示例以此顺序传给 `GA_OpenByIP` | 仍由现场人工确认输入，无程序默认值 |
-| Disconnect | confirmed-source / unverified-hardware | 厂家 Python 示例调用 `GA_Close()` | Phase A finally 中允许 |
+| Disconnect | confirmed-hardware-read-only | 厂家 Python 示例调用 `GA_Close()`；2026-09-27 五轴会话均正常结束 | Phase A finally 中允许 |
 | Axis selection | operator-observed | 相机 X/Y = 轴1/2；物镜 X/Y/Z = 轴3/5/4 | 写入 GUI-M1 元数据；真实运动仍禁止 |
-| Planned-position read signature | confirmed-source / unverified-hardware | `Python-正转20000个脉冲-延时5秒-反转20000个脉冲/jason.py`: `GA_GetPrfPos(axis, double*, 1, 0)` | 可读取 raw pulse，不转成 mm |
-| Encoder/feedback count position | documented / unverified-hardware | V7.3 手册 5.6：`GetAxisEncPos(axis, double*, count, clock)`；本机 `GAS.dll` 导出 `GA_GetAxisEncPos` | 允许增强 Phase A 只读；不擅自声称一定是独立物理编码器闭环 |
-| `GA_GetSts` signature | confirmed-source / unverified-hardware | 同一厂家示例：`GA_GetSts(axis, long*, 1, 0)` | 可读取并打印 raw value |
+| Planned-position read signature | confirmed-hardware-read-only | 厂家示例给出 `GA_GetPrfPos(axis, double*, 1, 0)`；2026-09-27 五轴均成功读取 | 可读取 raw pulse，不转成 mm |
+| Encoder/feedback count position | confirmed-hardware-read-only / semantics unresolved | V7.3 手册 5.6 给出签名；2026-09-27 五轴读取值为 `0/1`，而规划位置为数万 pulse | API 调用有效，但当前反馈模式不反映规划位置；禁止把它当作已验证实际位置 |
+| `GA_GetSts` signature | confirmed-hardware-read-only | 厂家示例给出签名；2026-09-27 五轴读取成功 | 可读取并按手册解释；动态状态仍需后续验收 |
 | `GA_GetSts` bit meanings | documented | V7.3 手册 5.6 列出 ESTOP、报警、软/硬限位、跟随误差、使能、运行、到位、Home 等 bit | 允许只读解码；危险位阻止运动 |
 | Controller healthy-state rule | partially confirmed-source | 手册定义危险位；11.6 给出 `RUNNING=0` 且规划位置距目标小于 1 pulse 的到位判据 | 已实现按位检查；仍需实机验证动态变化 |
 | `GA_AxisOn` | confirmed-source only | 厂家轴 1 运动示例 | Phase A 禁止调用 |
@@ -43,11 +43,11 @@
 | Direction sign | operator-observed | 轴1 `+→+Y`；轴2 `+→-Z`；轴3 `+→+Y`；轴4 `+→+X`（逆光、物镜向前）；轴5 `+→-Z` | 作为 GUI/数据坐标映射；不解除 motion safety gate |
 | Mechanical travel | axis mapping unknown | 官方 GUI 配置含逐轴 `PosLimt` / `NegLimt`，轴 1..6 为 +26/-26 mm；其他轴不同 | 必须先确认实际扫描轴号，再采用对应范围 |
 | Controller zero ↔ physical mm | unknown | 没有 Home/坐标定义资料 | motion forbidden |
-| Software limits | documented / unverified-hardware | V7.3 手册 5.7：`GetSoftLimit(axis, positive*, negative*)`，单位 pulse；DLL 导出 `GA_GetSoftLimit` | 允许增强 Phase A 只读，不写入限位 |
-| Positive/negative limit state | documented / confirmed-hardware-read-only pending enhanced rerun | `GetSts` 的 `0x04/0x08/0x20/0x40` 分别为正负软/硬限位触发 | 允许只读解码；任一位触发即阻止运动 |
+| Software limits | confirmed-hardware-read-only / no finite window | V7.3 手册 5.7 给出签名；2026-09-27 五轴均返回 `+2147483647/-2147483648` | 当前没有可依赖的有限控制器软限位；禁止用该结果解除运动安全门 |
+| Positive/negative limit state | documented / current inactive state confirmed | `GetSts` 的 `0x04/0x08/0x20/0x40` 分别为正负软/硬限位；2026-09-27 五轴均未置位 | 当前快照无触发；接线、极性和触发行为仍未验收 |
 | Stop API | documented / implemented-local | V7.3 手册 5.6：`Stop(mask, option)`；mask bit 对应轴，option=0 平滑停、1 急停；DLL 导出 `GA_Stop` | Adapter 已实现，尚未实机触发验证；不能替代物理急停 |
 | Home API/procedure | API documented, workflow unverified | V7.3 手册 5.14 给出 HomeStart/Stop/参数/状态；当前机构的模式、方向和参数未验收 | 先用官方 GUI 完成受监督回零；Python Home 保持禁用 |
-| Axis 3 `0x00004000` snapshot | confirmed-hardware-read-only | 2026-09-26 五轴快照；手册定义为 `HOME_SWITCH` | 表示零位输入有效，不等于报警或 HOME_SUCCESS |
+| Axis 3 `0x00004000` snapshot | confirmed-hardware-read-only, repeated | 2026-09-26 与 2026-09-27 五轴快照；手册定义为 `HOME_SWITCH` | 表示零位输入有效，不等于报警或 HOME_SUCCESS |
 | `GA_Reset` | confirmed-source, state-changing | 厂家示例调用，但会改变控制器状态 | Phase A 禁止调用 |
 | `GA_ZeroPos` | confirmed-source, state-changing | 厂家示例调用 | Phase A 禁止调用 |
 | `GA_EncOff` | confirmed-source, state-changing | 厂家示例调用 | Phase A 禁止调用 |

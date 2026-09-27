@@ -138,7 +138,10 @@ def connection_values() -> dict[str, str]:
 
 
 def test_vendor_library_loads_without_connecting_hardware() -> None:
-    stage = DimensionStage(DimensionStageConfig(dll_path=gas_dll()))
+    dll_path = gas_dll()
+    if not dll_path.is_file():
+        pytest.skip("仓库外未提供 positioner/GAS.dll；Fake DLL 测试仍会验证绑定和调用")
+    stage = DimensionStage(DimensionStageConfig(dll_path=dll_path))
     dll = stage._load_library()
     assert dll.GA_OpenByIP is not None
     assert dll.GA_GetPrfPos is not None
