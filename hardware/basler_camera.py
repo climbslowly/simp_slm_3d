@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -117,6 +118,11 @@ class BaslerCamera(CameraBase):
     def is_connected(self) -> bool:
         return bool(self._camera is not None and self._camera.IsOpen())
 
+    @property
+    def image_shape(self) -> tuple[int, int]:
+        camera = self._require_camera()
+        return int(camera.Height.GetValue()), int(camera.Width.GetValue())
+
     def connect(self) -> None:
         if self.is_connected:
             return
@@ -185,6 +191,16 @@ class BaslerCamera(CameraBase):
             return np.asarray(result.Array).copy()
         finally:
             result.Release()
+
+    def grab_image_interruptible(
+        self, stop_event: threading.Event, timeout_ms: int = 5000
+    ) -> np.ndarray:
+        if stop_event.is_set():
+            raise InterruptedError("真实相机采集已取消")
+        image = self.grab_image(timeout_ms=timeout_ms)
+        if stop_event.is_set():
+            raise InterruptedError("真实相机采集完成时已收到停止请求")
+        return image
 
     def start_grabbing(self) -> None:
         camera = self._require_camera()

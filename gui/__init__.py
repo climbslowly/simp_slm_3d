@@ -1,1 +1,1 @@
-"""Dimension Camera GUI-M1（默认且仅支持 Mock）。"""
+"""Dimension Camera GUI：默认 Mock，显式参数可接入真实五轴和 Basler 相机。"""

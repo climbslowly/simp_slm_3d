@@ -1,6 +1,6 @@
 # Dimension Stage Hardware Evidence Matrix
 
-最后更新：2026-09-27，软件版本：bring-up v0.3 + GUI-M1。
+最后更新：2026-09-27，软件版本：bring-up v0.4 + GUI-M2。
 
 ## 证据规则
 
@@ -25,7 +25,7 @@
 | Controller connection | confirmed-hardware-read-only | 厂家 Python 示例调用 `GA_OpenByIP(bytes, bytes, 0, 0)`；实验电脑只读连接成功 | 仅允许 Phase A 只读入口 |
 | PCIP / CardIP | documented in supplied official package | `ComParam.xml` 为 PCIP `192.168.0.200`、CardIP `192.168.0.1`；Python 示例以此顺序传给 `GA_OpenByIP` | 仍由现场人工确认输入，无程序默认值 |
 | Disconnect | confirmed-hardware-read-only | 厂家 Python 示例调用 `GA_Close()`；2026-09-27 五轴会话均正常结束 | Phase A finally 中允许 |
-| Axis selection | operator-observed | 相机 X/Y = 轴1/2；物镜 X/Y/Z = 轴3/5/4 | 写入 GUI-M1 元数据；真实运动仍禁止 |
+| Axis selection | operator-observed | 相机 X/Y = 轴1/2；物镜 X/Y/Z = 轴3/5/4 | REAL GUI 使用该映射，首次单步仍需逐轴观察 |
 | Planned-position read signature | confirmed-hardware-read-only | 厂家示例给出 `GA_GetPrfPos(axis, double*, 1, 0)`；2026-09-27 五轴均成功读取 | 可读取 raw pulse，不转成 mm |
 | Encoder/feedback count position | confirmed-hardware-read-only / semantics unresolved | V7.3 手册 5.6 给出签名；2026-09-27 五轴读取值为 `0/1`，而规划位置为数万 pulse | API 调用有效，但当前反馈模式不反映规划位置；禁止把它当作已验证实际位置 |
 | `GA_GetSts` signature | confirmed-hardware-read-only | 厂家示例给出签名；2026-09-27 五轴读取成功 | 可读取并按手册解释；动态状态仍需后续验收 |
@@ -37,16 +37,16 @@
 | `GA_SetPos` | confirmed-source only | 厂家示例传入 `c_int64` pulse target | Phase A 禁止调用 |
 | `GA_SetVel` | confirmed-source only | 厂家示例说明单位 pulse/ms | Phase A 禁止调用 |
 | Axis 1 `GA_Update(1)` | confirmed-source only | 厂家示例仅演示轴 1 | Phase A 禁止调用 |
-| Multi-axis start mask | documented | V7.3 手册 5.4：bit0..bit7 对应轴 1..8；轴 n mask=`1 << (n-1)` | Adapter 已实现；真实运动仍受其他安全门阻止 |
-| Axis 1 pulse/mm | confirmed by read/GUI comparison | `-57363 pulse` 对应官方绝对坐标 `-5.73630 mm`；官方 `+` 后读数为 `-57362 pulse` | 记录为轴1 `10000 pulse/mm`；不外推到其他轴 |
-| Axis 2..5 pulse/mm | candidate, not yet accepted | 官方 GUI 配置写有 `PulsPerRev=10000`、`Lead=1`、`Rate=1`，但未逐轴完成读数对照 | motion forbidden |
-| Direction sign | operator-observed | 轴1 `+→+Y`；轴2 `+→-Z`；轴3 `+→+Y`；轴4 `+→+X`（逆光、物镜向前）；轴5 `+→-Z` | 作为 GUI/数据坐标映射；不解除 motion safety gate |
-| Mechanical travel | axis mapping unknown | 官方 GUI 配置含逐轴 `PosLimt` / `NegLimt`，轴 1..6 为 +26/-26 mm；其他轴不同 | 必须先确认实际扫描轴号，再采用对应范围 |
-| Controller zero ↔ physical mm | unknown | 没有 Home/坐标定义资料 | motion forbidden |
-| Software limits | confirmed-hardware-read-only / no finite window | V7.3 手册 5.7 给出签名；2026-09-27 五轴均返回 `+2147483647/-2147483648` | 当前没有可依赖的有限控制器软限位；禁止用该结果解除运动安全门 |
-| Positive/negative limit state | documented / current inactive state confirmed | `GetSts` 的 `0x04/0x08/0x20/0x40` 分别为正负软/硬限位；2026-09-27 五轴均未置位 | 当前快照无触发；接线、极性和触发行为仍未验收 |
+| Multi-axis start mask | documented / implemented | V7.3 手册 5.4：bit0..bit7 对应轴 1..8；轴 n mask=`1 << (n-1)` | REAL GUI 合并同组变更轴后一次 Update |
+| Axis 1 pulse/mm | confirmed by read/GUI comparison | `-57363 pulse` 对应官方绝对坐标 `-5.73630 mm`；官方 `+` 后读数为 `-57362 pulse` | `10000 pulse/mm` |
+| Axis 2..5 pulse/mm | vendor-configured / pending motion observation | 官方控制软件轴 1..5 均为 `PulsPerRev=10000`、`Lead=1`、`Rate=1` | REAL GUI 采用 `10000 pulse/mm`；首次 `0.001 mm` 单步逐轴验收 |
+| Direction sign | operator-observed | 轴1 `+→+Y`；轴2 `+→-Z`；轴3 `+→+Y`；轴4 `+→+X`（逆光、物镜向前）；轴5 `+→-Z` | 作为 REAL GUI/数据坐标映射 |
+| Mechanical/software range | vendor-configured | 官方控制软件轴 1..5 的 `PosLimt/NegLimt` 均为 `+26/-26 mm` | 项目软件边界；REAL 连接时同步写入控制器软限位 |
+| Controller zero ↔ GUI mm | vendor-configured open-loop | 官方 GUI 与轴1 `pulse/10000` 对照一致；启动读取当前规划位置，不自动 Home | 用于开环 GUI 坐标；不声称编码器实际位置 |
+| Software limits | implemented / pending motion validation | 现场初始值为完整 int32 范围；REAL 连接调用 `GA_SetSoftLimit` 写入按方向换算的 `±260000 pulse` | 软件预检和控制器软限位双层保护 |
+| Positive/negative limit state | documented / enabled in REAL mode | `GetSts` 的 `0x04/0x08/0x20/0x40` 分别为正负软/硬限位；REAL 连接调用 `GA_LmtsOn(axis,-1)` | 朝已触发方向阻止运动，允许反向退回；极性/触发仍需实机验收 |
 | Stop API | documented / implemented-local | V7.3 手册 5.6：`Stop(mask, option)`；mask bit 对应轴，option=0 平滑停、1 急停；DLL 导出 `GA_Stop` | Adapter 已实现，尚未实机触发验证；不能替代物理急停 |
-| Home API/procedure | API documented, workflow unverified | V7.3 手册 5.14 给出 HomeStart/Stop/参数/状态；当前机构的模式、方向和参数未验收 | 先用官方 GUI 完成受监督回零；Python Home 保持禁用 |
+| Home API/procedure | documented / implemented-optional | V7.3 手册 5.14；实现 SetPrmSingle/Start/GetSts/Stop | GUI 不自动 Home；仅在明确需要重建零点时显式调用 |
 | Axis 3 `0x00004000` snapshot | confirmed-hardware-read-only, repeated | 2026-09-26 与 2026-09-27 五轴快照；手册定义为 `HOME_SWITCH` | 表示零位输入有效，不等于报警或 HOME_SUCCESS |
 | `GA_Reset` | confirmed-source, state-changing | 厂家示例调用，但会改变控制器状态 | Phase A 禁止调用 |
 | `GA_ZeroPos` | confirmed-source, state-changing | 厂家示例调用 | Phase A 禁止调用 |
@@ -59,15 +59,12 @@
 - `DimensionStage.load_library()` 是 Level 0。
 - `connect()`、规划/反馈位置读取、软限位读取、状态读取/解码和 `disconnect()` 是 Level 1。
 - `stop()`/`emergency_stop()` 已按手册实现，但增强只读脚本不会调用；尚未完成实机停止验收。
-- `move_absolute_mm()` 是 Level 2，当前默认配置必然被 safety gate 拒绝。
+- `GasFiveAxisStage` 用单一控制器会话接入 REAL GUI，并在连接时写软限位、启用硬限位。
+- REAL GUI 默认最大单条命令 `0.1 mm`，计划预检同时检查首点和相邻点步长。
+- Home API 已实现但不自动调用；开环点位运动直接读取启动时规划坐标。
 - `get_position()` 对真实 Adapter 明确表示 mm；标定未知时会报错，不会返回伪装成 mm 的 pulse。
 
-## 需要补充的厂家资料
+## 下一步现场证据
 
-请优先提供与现场控制器版本匹配的：
-
-1. 与当前 `GAS.dll 1.0.0.1` 对应的 GAS SDK `.h` 头文件或版本说明；
-2. 控制器型号、固件手册及通讯配置说明；
-3. 位移台/电机型号与 stage manual（行程、方向、pulse/mm 或丝杠/细分参数）；
-4. 接线图，特别是正负限位、原点、急停输入；
-5. 五轴增强只读快照，以及官方 GUI 已知位移前后的 pulse 对照。
+现有厂家资料已用于实现。剩余证据由 REAL GUI 分级验收取得：当前位置采集、逐轴
+`0.001 mm` 往返、Stop、限位方向和小范围扫描。

@@ -1,4 +1,4 @@
-"""GUI-M1 启动入口。"""
+"""五轴扫描 GUI 启动入口；默认 Mock，REAL 模式必须显式确认。"""
 
 from __future__ import annotations
 
@@ -9,12 +9,22 @@ from pathlib import Path
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Dimension Camera GUI-M1 Mock 扫描")
+    parser = argparse.ArgumentParser(description="Dimension Camera 五轴扫描 GUI")
+    parser.add_argument("--config", type=Path, default=Path("configuration.json"))
     parser.add_argument("--open", type=Path, help="启动后打开已有 GUI-M1 扫描目录")
     parser.add_argument("--auto-scan", action="store_true", help="自动运行默认 5×3 Mock 扫描（测试/证据用）")
     parser.add_argument("--screenshot", type=Path, help="扫描完成后保存真实 Qt 窗口截图")
     parser.add_argument("--offscreen", action="store_true", help="使用 Qt offscreen 平台；截图不代表人工点击验证")
+    parser.add_argument("--real", action="store_true", help="连接 hardware_local.json 中的真实五轴和 Basler 相机")
+    parser.add_argument("--hardware-config", type=Path, default=Path("hardware_local.json"))
+    parser.add_argument("--confirm-real-motion", action="store_true", help="允许 REAL GUI 发出受限运动命令")
     args = parser.parse_args()
+    if args.confirm_real_motion and not args.real:
+        parser.error("--confirm-real-motion 只能与 --real 一起使用")
+    if args.real and not args.confirm_real_motion:
+        parser.error("REAL GUI 必须同时提供 --confirm-real-motion")
+    if args.real and args.auto_scan:
+        parser.error("REAL GUI 禁止使用 --auto-scan")
     if args.offscreen:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -27,7 +37,25 @@ def main() -> int:
         families = QtGui.QFontDatabase.applicationFontFamilies(font_id)
         if families:
             application.setFont(QtGui.QFont(families[0], 9))
-    window = MainWindow()
+    if args.real:
+        from hardware.basler_camera import BaslerCamera, select_basler_camera
+        from hardware.diagnostic_profile import load_hardware_diagnostic_profile
+        from hardware.gas_five_axis_stage import GasFiveAxisStage
+
+        profile = load_hardware_diagnostic_profile(args.hardware_config)
+        if profile.camera.camera_index is None:
+            parser.error("hardware_local.json 缺少 camera.camera_index")
+        selected = select_basler_camera(profile.camera.camera_index)
+        stage = GasFiveAxisStage(profile, allow_motion=True)
+        camera = BaslerCamera(selected.serial_number)
+        window = MainWindow(
+            config_path=args.config,
+            stage=stage,
+            camera=camera,
+            device_mode="REAL",
+        )
+    else:
+        window = MainWindow(config_path=args.config)
     if args.open:
         window.open_session(args.open)
     window.show()

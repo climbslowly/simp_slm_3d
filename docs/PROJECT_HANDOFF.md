@@ -1,7 +1,7 @@
 # Dimension Camera 项目交接摘要
 
 更新时间：2026-09-27
-功能基线：Stage Bring-up V0.3 + GUI-M1；开始新对话时以实际 `main` 最新提交为准。
+功能基线：Stage Bring-up V0.4 + GUI-M2；开始新对话时以实际 `main` 最新提交为准。
 
 本文件供新的 Codex 对话快速恢复上下文。开始工作前仍应读取实际代码、`git status`、
 `README.md` 和本文件引用的安全文档；本摘要不能替代当前工作区事实或真实硬件验证。
@@ -24,7 +24,7 @@
 
 ## 2. 已完成的软件能力
 
-### GUI-M1（Mock，已由用户人工验收）
+### GUI-M2（Mock 默认，REAL 显式入口）
 
 - PySide6 + pyqtgraph 原生桌面 GUI；启动命令：
 
@@ -40,8 +40,11 @@
 - `gray` 伪彩已改为内置黑白色表，不再查找不存在的 pyqtgraph 文件。
 - 软件扫描边界 `objective_scan_bounds_mm` 会在 GUI 与控制器 preflight 两层阻止超限；
   不会静默截断或改写用户计划。
-- GUI 仍明确、强制为 Mock：`gui/main_window.py` 当前创建 `MockCamera` 与
-  `MockXYZStage`，不会加载 GAS.dll 或连接 Basler 相机。
+- 无参数启动仍创建 `MockCamera` 与 `MockXYZStage`。
+- `--real --hardware-config hardware_local.json --confirm-real-motion` 接入 Basler 和
+  `GasFiveAxisStage`；启动读取现有规划位置，不自动 Home。
+- REAL 连接写入 `±260000 pulse` 软限位、调用 `GA_LmtsOn(axis,-1)`，并把单条命令限制为
+  `0.1 mm`。GUI 提供不移动的“当前位置采集一张”。
 
 人工验收步骤见 `GUI_M1_ACCEPTANCE.md`。
 
@@ -59,8 +62,7 @@
   不访问位移台。
 - `scripts/snapshot_stage_axes.py`：轴 1～5 增强只读规划/反馈 pulse、软限位和状态；不运动。
 - `scripts/check_motion_readiness.py`：完全离线列出真实运动阻塞项。
-- `scripts/verify_stage_minimal_motion.py`：受完整安全门约束的单轴最小运动入口；当前应在
-  连接硬件前因 Home 现场流程和逐轴标定等项目未完成而拒绝。
+- `scripts/verify_stage_minimal_motion.py`：受完整安全门约束的单轴最小运动入口。
 - 2026-09-27 增强快照：五轴只读均成功且无安全故障位；轴 3 再次为 `HOME_SWITCH`。
   编码器/反馈读数为 `0/1`，不跟随规划位置；软限位为完整 int32 上下界，未形成有限窗口。
 - 仓库只保存 `hardware_profile.example.json`；实验电脑复制为被忽略的
@@ -85,7 +87,7 @@
 
 ## 4. 真实运动安全状态
 
-真实运动目前仍禁止。不要通过设置 `allow_motion=True`、修改 capability 或伪造配置绕过。
+真实运动已开放给显式 REAL GUI，并受软件范围、控制器软限位、硬限位状态和单步上限约束。
 
 已确认：
 
@@ -100,22 +102,22 @@
 
 仍阻塞：
 
-- 当前反馈模式为何只返回 `0/1`，以及是否存在可用的独立物理编码器；
+- 当前反馈模式为何只返回 `0/1`；REAL GUI 不依赖它，使用规划位置开环运行；
 - Stop 的实机效果和经过验证的独立物理停止方案；
-- 当前机构的 Home 模式、方向、参数与流程；
+- Home 实机流程（仅在确实需要重建零点时验收；GUI 不自动调用）；
 - 正负限位接线/极性的现场核对；
-- 轴 2～5 pulse/mm，以及全部轴的零点、行程、软限位和最小安全步长。
+- 轴 2～5 的 `0.001 mm` 实机方向/距离、Stop 和限位触发行为。
 
 证据矩阵见 `docs/DIMENSION_STAGE_EVIDENCE.md`；第一次只读接入 SOP 见
 `docs/FIRST_HARDWARE_BRINGUP.md`。
 
 ## 5. 配置与采集时序现状
 
-GUI-M1 已有：
+GUI-M2 配置：
 
-- `exposure_ms`：Mock 曝光；
-- `settling_ms`：模拟到位后的稳定等待；
-- `objective_scan_bounds_mm`：物镜 GUI XYZ 软件扫描边界，默认 `null`。
+- `exposure_ms`：Mock 使用配置值；REAL 启动时先显示相机当前曝光；
+- `settling_ms`：到位后的稳定等待；
+- `objective_scan_bounds_mm`：REAL 模式由五轴 `±26 mm` 边界覆盖。
 
 真实相机诊断配置（`hardware_local.json`）另有：
 
@@ -125,16 +127,15 @@ GUI-M1 已有：
 - `inter_frame_delay_ms`；
 - `frames`。
 
-这些真实相机参数目前仅用于独立诊断脚本，尚未接入当前 GUI 扫描控制器。Basler
-`grab_image()` 使用 `GrabOne()` 并在释放 pypylon result 前复制数组；真实系统仍需通过
-多帧诊断判断曝光修改、旧帧、触发模式和取帧延迟。
+REAL GUI 已接入 `camera_index` 选定的 Basler 相机；曝光由 GUI 写入。诊断脚本的丢弃帧、
+曝光后等待和帧间等待仍只用于独立诊断。`grab_image()` 在释放 pypylon result 前复制数组。
 
 ## 6. 自动验证与不可声称的验证
 
-在增强只读诊断版本上，本机结果为：
+在 GUI-M2 REAL 接入版本上，本机结果为：
 
 ```text
-54 passed
+60 passed
 compileall passed
 git diff --check passed（只有 Windows LF/CRLF 提示）
 ```
@@ -144,7 +145,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 - 真实五轴可以安全运动；
 - Stop、限位和状态 bit 的真实控制器动态行为已经验收；
 - CXP/USB 相机所有触发和缓存模式正确；
-- GUI 已经接入真实相机或真实位移台。
+- 真实 GUI 已经完成实验电脑实机运动验收。
 
 ## 7. 实验电脑建议执行顺序
 
@@ -172,10 +173,10 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
    notepad .\hardware_local.json
    ```
 
-4. 先执行真实相机多帧诊断，不访问位移台。
-5. 再执行五轴只读快照，不运动。
-6. 执行离线 motion readiness audit；当前出现 `BLOCKED` 和退出码 2 是预期结果。
-7. 不执行真实运动；将 JSON 报告、终端输出和必要截图提供给下一轮分析。
+4. 执行离线 motion readiness audit；连接配置完整时应全部 READY。
+5. 启动 REAL GUI，先核对位置并执行“当前位置采集一张”。
+6. 把步长设为 `0.001 mm`，逐轴完成一次单步和反向返回。
+7. 验收 Stop 后再做 2～3 点小范围扫描，并保存终端输出与扫描目录。
 
 具体命令不要从本摘要猜测，直接复制 `docs/HARDWARE_DIAGNOSTICS.md` 中的版本。
 
@@ -183,12 +184,10 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 
 优先顺序：
 
-1. 运行增强五轴只读快照，取得规划/反馈 pulse、软限位和解码后的状态。
-2. 根据快照补齐逐轴 pulse/mm、零点、行程、限位接线和 Stop 实机证据。
-3. GUI-M2：在保留 Mock 默认模式和真实运动禁用的前提下，把已有 `BaslerCamera` 接入
-   当前 GUI，完成设备选择、曝光写入/读回、预览和单点保存。
-4. 独立脚本完成受监督的单轴最小运动验收后，再把验证过的五轴 Adapter 接入 GUI。
-5. 最后按“单点移动拍摄 → 2～3 点小范围扫描 → 小型二维扫描”逐级验收。
+1. REAL GUI 当前位置采集，确认真实图像显示和保存。
+2. 五轴分别完成 `+0.001/-0.001 mm` 往返，记录物理方向。
+3. 验收 GUI Stop 与状态恢复。
+4. 按“2～3 点单轴扫描 → 小型二维扫描”逐级验收。
 
 ## 9. 给新对话的建议开场
 
@@ -197,7 +196,7 @@ git diff --check passed（只有 Windows LF/CRLF 提示）
 > 请继续当前 `C:\slm_3d\dimension_camera` 项目。先读取
 > `docs/PROJECT_HANDOFF.md`、`README.md`、`docs/HARDWARE_DIAGNOSTICS.md` 和实际 Git
 > 状态；不要覆盖本机 `configuration.json` 或提交 `hardware_local.json`/`output/`。
-> 当前功能基线为 Stage Bring-up V0.3 + GUI-M1，请以实际 `main` 最新提交为准；GUI-M1 Mock 已验收，真实
-> 运动仍禁止。请以我随后提供的实验电脑
+> 当前功能基线为 Stage Bring-up V0.4 + GUI-M2，请以实际 `main` 最新提交为准；Mock 已验收，REAL
+> GUI 等待分级实机验收。请以我随后提供的实验电脑
 > 诊断结果为准继续工作，不把 Mock/Fake 测试当成实机验证。凡需实验电脑验证的改动，
 > 本机离线测试通过后提交并推送，并报告 commit hash 和更新命令。

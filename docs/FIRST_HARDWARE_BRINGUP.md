@@ -56,7 +56,7 @@ Phase A 明确禁止：Reset、Zero、Encoder On/Off、Axis/Servo On、Home、Jo
 - 正负限位信号定义和当前状态；
 - 状态位的实机动态变化、规划/反馈位置关系和运动完成判据；
 - Stop 的实机停止效果与已验证的物理急停方案；
-- Home API/流程（如果将使用）；
+- Home API 已实现为可选操作；点位运动不要求启动时自动 Home；
 - 单轴/多轴 `GA_Update` mask 已有手册定义，但仍需与现场轴行为核对；
 - 第一次运动目标、速度、加速度和观察人员确认。
 

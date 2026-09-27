@@ -1,10 +1,10 @@
 # Dimension Camera
 
-维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.3 + GUI-M1**：
+维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.4 + GUI-M2**：
 硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV/MAT 保存和自动测试已经建立；
 本轮增加了单位隔离、能力/标定模型、真实运动 safety gate、dry-run 和只读接入 SOP。
-现已增加 **GUI-M1**：PySide6 + pyqtgraph 的离线 Mock 空间扫描、原始 TIFF 保存、联动浏览、
-暂停/继续/停止和历史目录回读。真实硬件行为仍保持原安全边界，GUI-M1 不加载或连接真实设备。
+GUI 默认仍是 Mock；显式 REAL 启动时接入 Basler 相机和五轴 GAS 控制器，支持当前位置采集、
+手动单步与空间扫描。真实模式使用控制器规划位置开环运行，不依赖当前无效的编码器 `0/1` 读数。
 
 ## 先说安全边界
 
@@ -15,8 +15,10 @@
 - 真实运动必须显式设置 `allow_motion=True`，且完整通过能力、标定、范围和健康状态安全门。
 - ETH_GAS_N V7.3 手册已确认轴启动 mask、状态 bit、Stop、反馈位置和软限位读取方式。
 - Stop 已在 Adapter 中实现但尚未实机验收；增强只读诊断不会调用 Stop 或任何状态修改 API。
-- Home API 虽有手册定义，但当前机构的回零模式、方向和参数尚未验收，Python Home 继续禁用。
-- 当前默认配置即使人为设置 `allow_motion=True`，仍会因回零流程、pulse/mm、零点和行程等未知而拒绝运动。
+- Home API 已按手册实现，但 GUI 启动不自动 Home；它直接读取控制器当前规划位置。
+- 厂家控制软件配置确认轴 1..5 为 `10000 pulse/mm`、坐标范围 `±26 mm`；真实 GUI 将其作为软件边界和控制器软限位。
+- REAL 模式把单条命令限制为 `0.1 mm`，并启用硬限位输入、检查状态位和运动方向。
+- 示例配置仍不会自行连接设备；实验电脑必须在被 Git 忽略的 `hardware_local.json` 中填写 DLL、IP 和相机序号。
 
 完整证据状态见 [Dimension Stage Evidence Matrix](docs/DIMENSION_STAGE_EVIDENCE.md)，
 第一次接线步骤见 [First Hardware Bring-up SOP](docs/FIRST_HARDWARE_BRINGUP.md)。
@@ -118,21 +120,21 @@ GAS.dll:              controller coordinate, pulse/count
 - mm/pulse 转换只能在 `pulses_per_mm`、方向和零点全部已知时执行；
 - 真实运动按危险状态位逐项拦截，不使用完整 raw status 白名单；
 - Stop、状态解释、反馈位置、软限位读取和轴启动 mask 已有手册依据；
-- 自动 Home 仍因现场流程未验收而抛出 unsupported。
+- Home 是显式可选操作，不再是点位运动前置条件；GUI 不自动调用。
 
-### 尚未确认，禁止在真实设备上猜测
+### 仍需用首次小步运动验收
 
 - 设备枚举：示例只有固定 IP 连接，没有枚举 API；
-- 目标物理轴与官方 GUI 逻辑轴号的对应关系；
-- `PulsPerRev=10000`、`Lead=1`、`Rate=1` 的准确换算公式，以及 pulse 正方向；
-- 目标轴应采用哪一组 `PosLimt` / `NegLimt` 行程；
-- 当前反馈计数模式为何只返回 `0/1`，以及是否使用独立物理编码器；
+- 已记录的轴号、GUI 逻辑方向与实际机构方向是否逐轴一致；
+- `PulsPerRev=10000`、`Lead=1`、`Rate=1` 对应的 `10000 pulse/mm` 是否逐轴产生预期距离；
+- 厂家配置的 `PosLimt=26` / `NegLimt=-26` 是否与每轴实际可用行程一致；
+- 当前反馈计数模式为何只返回 `0/1`；它不再阻塞开环规划位置运行；
 - 当前机构应采用的 Home 模式、方向、速度和最大搜索距离；
 - Stop 的现场实际减速效果及独立物理急停方案；
 - 每轴限位接线、触发极性，以及为何控制器软限位仍为完整 int32 范围；
-- 轴 2..5 的 pulse/mm、零点和安全单步。
+- 五轴 `0.001 mm` 指令的实际距离、方向和返回起点能力。
 
-拿到控制器型号和官方 API 手册后，应优先补齐这些项目。
+这些项目通过 REAL GUI 的分级验收继续记录，不再等待额外厂家文件。
 
 ## Basler 相机控制方式
 
@@ -184,7 +186,7 @@ output/20260916_143210_mock_demo/
     ...
 ```
 
-## 运行 GUI-M1（仅 Mock）
+## 运行 GUI
 
 ```powershell
 cd C:\slm_3d\dimension_camera
@@ -192,7 +194,21 @@ cd C:\slm_3d\dimension_camera
 .\.venv\Scripts\python.exe -m gui.app
 ```
 
-重新打开已有 GUI-M1 扫描目录：
+真实五轴和 Basler 相机使用实验电脑的 `hardware_local.json`：
+
+```powershell
+.\.venv\Scripts\python.exe -m gui.app `
+  --real `
+  --hardware-config .\hardware_local.json `
+  --confirm-real-motion
+```
+
+REAL 模式启动时读取五轴规划位置，不执行 Reset、Zero 或 Home；随后写入 `±260000 pulse`
+控制器软限位并调用 `GA_LmtsOn(axis, -1)` 启用正负硬限位。GUI 的“当前位置采集一张”不会
+产生位移；第一次运动应只使用 `0.001 mm` 手动步长。限位触发时程序拒绝继续朝限位方向，
+但允许反向退回。
+
+重新打开已有扫描目录：
 
 ```powershell
 .\.venv\Scripts\python.exe -m gui.app --open "output\gui_m1\<scan_directory>"
@@ -211,8 +227,8 @@ GUI-M1 现按五轴机构拆成两组光学逻辑坐标：
 当前扫描计划只使用物镜逻辑 XYZ；相机 XY 是扫描前的固定定位轴，扫描运行时被锁定。
 轴身份和正负方向来自操作者使用官方控制软件的现场观察，按
 `operator_observed_with_official_controller_software` 写入 `scan_config.json`、CSV 和 MAT。
-这不是 Python 自动运动或编码器闭环验证；轴2～5的 pulse/mm、各轴零点/行程、限位接线和
-可靠停止效果仍未现场确认，真实运动入口继续关闭。Mock 图像用“物镜横向位置 − 相机位置”
+REAL 模式使用厂家配置的开环规划位置；它不声称完成编码器闭环验证。限位接线和可靠停止效果
+仍需通过首次 GUI 单步验收。Mock 图像用“物镜横向位置 − 相机位置”
 模拟相对位移，不代表真实光学响应。
 
 ### 可配置扫描软件边界
@@ -377,12 +393,10 @@ plan = ScanPlan.from_range(
 dry-run 位置/存储/行程检查、相机多帧诊断、五轴只读快照与运动 readiness audit，以及
 GUI-M1 空间计划、软件边界、保存回读、取消语义和离屏 Qt 构造。以最新提交的实际测试结果为准。
 
-## 下一步（进入真实硬件 GUI 前）
+## 下一步（REAL GUI 分级验收）
 
-1. 按 SOP 执行 Phase A 只读 bring-up，保存 raw position/status 和设备铭牌信息；
-2. 提供匹配版本的 GAS `.h`、SDK/API manual、官方 sample project、controller manual；
-3. 提供 stage manual，确认 pulse/mm、方向、行程、零点、限位与急停方案；
-4. 运行增强只读快照，核对规划/反馈位置、软限位和逐位状态；
-5. 用官方 GUI 的已知安全位移逐轴确认 pulse/mm、零点和行程；
-6. 另行评审 Phase B 最小运动与 Stop 验收；本版本不能通过只改 `allow_motion` 绕过安全门；
-7. 核心硬件闭环验证后，在现有 GUI-M1 上进入 GUI-M2 真实相机接入；真实位移仍保持禁用。
+1. REAL GUI 启动后先核对五轴显示位置，并点击“当前位置采集一张”。
+2. 把手动步长改为 `0.001 mm`，逐轴单击一次并观察方向与停止行为。
+3. 每轴完成 `+0.001/-0.001 mm` 往返，核对规划位置回到起点。
+4. 验收 Stop 后再执行 2～3 点、步长不超过 `0.1 mm` 的单轴扫描。
+5. 最后再进入小范围二维扫描；Home 仅在确实需要重建控制器零点时单独使用。

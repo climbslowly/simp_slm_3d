@@ -5,12 +5,11 @@ from typing import Any, Callable
 
 import pytest
 
-from hardware.dimension_stage import DimensionStage, DimensionStageConfig
+from hardware.dimension_stage import DimensionStage, DimensionStageConfig, HomeParameters
 from hardware.stage_safety import (
     AxisCalibration,
     StageCapabilities,
     StageSafetyError,
-    UnsupportedStageOperation,
     axis_status_motion_errors,
     decode_axis_status,
 )
@@ -85,7 +84,13 @@ class FakeGasDll:
         self.GA_GetSoftLimit = FakeFunction(
             "GA_GetSoftLimit", self.calls, get_soft_limits
         )
+        self.GA_SetSoftLimit = FakeFunction("GA_SetSoftLimit", self.calls)
+        self.GA_LmtsOn = FakeFunction("GA_LmtsOn", self.calls)
         self.GA_Stop = FakeFunction("GA_Stop", self.calls)
+        self.GA_HomeSetPrmSingle = FakeFunction("GA_HomeSetPrmSingle", self.calls)
+        self.GA_HomeStart = FakeFunction("GA_HomeStart", self.calls)
+        self.GA_HomeStop = FakeFunction("GA_HomeStop", self.calls)
+        self.GA_HomeGetSts = FakeFunction("GA_HomeGetSts", self.calls)
         self.GA_AxisOn = FakeFunction("GA_AxisOn", self.calls)
         self.GA_PrfTrap = FakeFunction("GA_PrfTrap", self.calls)
         self.GA_SetTrapPrmSingle = FakeFunction(
@@ -215,9 +220,9 @@ def test_range_violation_blocks_motion_before_motion_api() -> None:
     assert "GA_Update" not in fake.calls
 
 
-def test_unknown_home_capability_blocks_unsupported_operation() -> None:
+def test_home_requires_explicit_parameters() -> None:
     stage = DimensionStage(DimensionStageConfig(dll_path=gas_dll()))
-    with pytest.raises(UnsupportedStageOperation, match="unknown"):
+    with pytest.raises(StageSafetyError, match="HomeParameters"):
         stage.home()
 
 
@@ -299,6 +304,30 @@ def test_update_and_stop_use_axis_bit_mask() -> None:
     stage.disconnect()
     assert fake.GA_Update.arguments[-1] == (4,)
     assert fake.GA_Stop.arguments == [(4, 0), (4, 4)]
+
+
+def test_soft_hard_limits_and_home_use_documented_calls() -> None:
+    fake = FakeGasDll()
+    stage = FakeDimensionStage(
+        DimensionStageConfig(
+            dll_path=gas_dll(),
+            **connection_values(),
+            calibration=AxisCalibration(axis_id=2),
+            home_parameters=HomeParameters(direction=0),
+        ),
+        fake,
+    )
+    stage.connect()
+    stage.set_soft_limits_pulse(260000, -260000)
+    stage.enable_hard_limits()
+    stage.home()
+    stage.stop_home()
+    stage.disconnect()
+    assert fake.GA_SetSoftLimit.arguments == [(2, 260000, -260000)]
+    assert fake.GA_LmtsOn.arguments == [(2, -1)]
+    assert fake.GA_HomeSetPrmSingle.arguments[-1][0:4] == (2, 1, 0, 0)
+    assert fake.GA_HomeStart.arguments == [(2,)]
+    assert fake.GA_HomeStop.arguments == [(2,)]
 
 
 def test_real_motion_is_opt_in_and_default_calibration_unknown() -> None:

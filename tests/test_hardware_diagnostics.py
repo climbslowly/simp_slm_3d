@@ -149,12 +149,14 @@ def test_five_axis_snapshot_is_read_only_and_decodes_status(tmp_path: Path) -> N
     )
 
 
-def test_motion_readiness_audit_blocks_unknown_safety_evidence(tmp_path: Path) -> None:
+def test_motion_readiness_uses_vendor_axis_defaults_but_requires_connection(tmp_path: Path) -> None:
     path = tmp_path / "hardware_local.json"
     path.write_text(json.dumps(profile_payload()), encoding="utf-8")
     profile = load_hardware_diagnostic_profile(path)
     errors = readiness_for_axis(profile, 1)
     assert "dll_path 未配置" in errors
     assert not any("Stop API" in error for error in errors)
-    assert any("Home API" in error for error in errors)
-    assert any("机械行程" in error or "轴标定" in error for error in errors)
+    assert not any("Home API" in error for error in errors)
+    assert not any("机械行程" in error or "轴标定" in error for error in errors)
+    assert profile.axes[1].calibration().travel_min_mm == -26.0
+    assert profile.axes[1].max_single_step_mm == 0.1

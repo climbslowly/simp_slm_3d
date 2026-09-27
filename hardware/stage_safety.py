@@ -134,14 +134,15 @@ class StageCapabilities:
 
 
 # 连接/基础运动来自厂家 Python 示例；状态、Stop、限位、编码器位置和启动 mask 来自
-# 《博派科技 ETH_GAS_N 运动控制卡用户手册 V7.3》。Home API 虽已记录，但当前机构的
-# 回零模式、方向和现场流程尚未验收，因此仍保持 unknown。
+# 《博派科技 ETH_GAS_N 运动控制卡用户手册 V7.3》。Home API 已实现为显式可选操作；
+# 普通开环点位运动与 GUI 启动不会自动调用 Home。
 CURRENT_GAS_CAPABILITIES = StageCapabilities(
     position_read_supported=True,
     encoder_position_read_supported=True,
     status_read_supported=True,
     motion_supported=True,
     stop_supported=True,
+    home_supported=True,
     positive_limit_supported=True,
     negative_limit_supported=True,
     multi_axis_start_supported=True,

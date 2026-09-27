@@ -14,6 +14,32 @@ from pathlib import Path
 from .stage_safety import AxisCalibration
 
 
+# 厂家控制软件 system/SysParam.xml 的轴 1..5 配置：10000 pulse/rev、Lead=1、
+# Rate=1、位置范围 ±26 mm。GUI 逻辑方向来自已经完成的现场人工观察。控制器本身当前
+# 没有有限软限位，因此这里的范围由本项目在发命令前执行，并在真实 GUI 连接时写入
+# GA_SetSoftLimit。0.1 mm 是本项目首次 GUI 验收的单条命令上限，不是厂家机械参数。
+def _vendor_axis_defaults(direction_sign: int) -> dict[str, float | int]:
+    return {
+        "pulses_per_mm": 10000.0,
+        "travel_min_mm": -26.0,
+        "travel_max_mm": 26.0,
+        "direction_sign": direction_sign,
+        "home_position_mm": 0.0,
+        "soft_limit_min_mm": -26.0,
+        "soft_limit_max_mm": 26.0,
+        "max_single_step_mm": 0.1,
+    }
+
+
+VENDOR_AXIS_DEFAULTS: dict[int, dict[str, float | int]] = {
+    1: _vendor_axis_defaults(1),
+    2: _vendor_axis_defaults(-1),
+    3: _vendor_axis_defaults(1),
+    4: _vendor_axis_defaults(1),
+    5: _vendor_axis_defaults(-1),
+}
+
+
 def _finite_optional(value: object, name: str) -> float | None:
     if value is None:
         return None
@@ -166,32 +192,39 @@ def load_hardware_diagnostic_profile(path: Path) -> HardwareDiagnosticProfile:
             raise ValueError(
                 f"axes.{axis_id}.healthy_raw_status_values 必须是数组"
             )
-        direction = raw_axis.get("direction_sign")
+        defaults = VENDOR_AXIS_DEFAULTS.get(axis_id, {})
+
+        def configured(name: str) -> object:
+            value = raw_axis.get(name)
+            return defaults.get(name) if value is None else value
+
         axes[axis_id] = AxisDiagnosticSettings(
             axis_id=axis_id,
             label=str(raw_axis.get("label", f"axis {axis_id}")),
             physical_mapping=str(raw_axis.get("physical_mapping", "UNKNOWN")),
-            pulses_per_mm=_finite_optional(
-                raw_axis.get("pulses_per_mm"), f"axes.{axis_id}.pulses_per_mm"
-            ),
+            pulses_per_mm=_finite_optional(configured("pulses_per_mm"), f"axes.{axis_id}.pulses_per_mm"),
             travel_min_mm=_finite_optional(
-                raw_axis.get("travel_min_mm"), f"axes.{axis_id}.travel_min_mm"
+                configured("travel_min_mm"), f"axes.{axis_id}.travel_min_mm"
             ),
             travel_max_mm=_finite_optional(
-                raw_axis.get("travel_max_mm"), f"axes.{axis_id}.travel_max_mm"
+                configured("travel_max_mm"), f"axes.{axis_id}.travel_max_mm"
             ),
-            direction_sign=None if direction is None else int(direction),
+            direction_sign=(
+                None
+                if configured("direction_sign") is None
+                else int(configured("direction_sign"))
+            ),
             home_position_mm=_finite_optional(
-                raw_axis.get("home_position_mm"), f"axes.{axis_id}.home_position_mm"
+                configured("home_position_mm"), f"axes.{axis_id}.home_position_mm"
             ),
             soft_limit_min_mm=_finite_optional(
-                raw_axis.get("soft_limit_min_mm"), f"axes.{axis_id}.soft_limit_min_mm"
+                configured("soft_limit_min_mm"), f"axes.{axis_id}.soft_limit_min_mm"
             ),
             soft_limit_max_mm=_finite_optional(
-                raw_axis.get("soft_limit_max_mm"), f"axes.{axis_id}.soft_limit_max_mm"
+                configured("soft_limit_max_mm"), f"axes.{axis_id}.soft_limit_max_mm"
             ),
             max_single_step_mm=_finite_optional(
-                raw_axis.get("max_single_step_mm"),
+                configured("max_single_step_mm"),
                 f"axes.{axis_id}.max_single_step_mm",
             ),
             healthy_raw_status_values=tuple(int(item) for item in healthy),

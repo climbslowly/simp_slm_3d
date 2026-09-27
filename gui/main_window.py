@@ -1,4 +1,4 @@
-"""GUI-M1 主窗口：界面只提交命令，设备与写盘在 QThread 中执行。"""
+"""五轴扫描主窗口：界面只提交命令，设备与写盘在 QThread 中执行。"""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ pg.setConfigOption("imageAxisOrder", "row-major")
 
 
 STATE_TEXT = {
-    ScanState.IDLE: "空闲", ScanState.MOVING: "模拟移动", ScanState.WAITING_FOR_POSITION: "等待模拟到位",
-    ScanState.SETTLING: "稳定等待", ScanState.ACQUIRING: "Mock 采集", ScanState.SAVING: "保存原图与日志",
+    ScanState.IDLE: "空闲", ScanState.MOVING: "移动", ScanState.WAITING_FOR_POSITION: "等待到位",
+    ScanState.SETTLING: "稳定等待", ScanState.ACQUIRING: "采集", ScanState.SAVING: "保存原图与日志",
     ScanState.PAUSED: "已暂停", ScanState.STOPPING: "停止中", ScanState.STOPPED: "已停止",
     ScanState.COMPLETED: "已完成", ScanState.ERROR: "错误",
 }
@@ -96,21 +96,48 @@ def spin(value: float = 0.0, *, minimum: float = -10000, maximum: float = 10000,
 class MainWindow(QtWidgets.QMainWindow):
     scan_finished = QtCore.Signal(object)
 
-    def __init__(self, *, config_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        config_path: Path | None = None,
+        stage: object | None = None,
+        camera: object | None = None,
+        device_mode: str = "MOCK",
+    ) -> None:
         super().__init__()
+        self.device_mode = device_mode.upper()
+        if self.device_mode not in {"MOCK", "REAL"}:
+            raise ValueError("device_mode 必须是 MOCK 或 REAL")
         self.config_path = config_path or Path("configuration.json")
         self.config, config_error = load_config(self.config_path)
-        self.setWindowTitle("Dimension Camera — GUI-M1 MOCK 空间扫描")
+        self.setWindowTitle(f"Dimension Camera — {self.device_mode} 五轴空间扫描")
         self.resize(1500, 920)
         self.setMinimumSize(1180, 720)
 
-        self.stage = MockXYZStage(speed_mm_s=20.0)
-        self.stage.connect()
-        self.camera = MockCamera(
-            serial_number="MOCK-GUI-001", shape=(256, 320), seed=20260920,
-            position_provider=self.stage.get_signal_positions, capture_delay_s=0.025,
-        )
-        self.camera.connect()
+        if (stage is None) != (camera is None):
+            raise ValueError("stage 和 camera 必须同时提供")
+        if stage is None:
+            self.stage = MockXYZStage(speed_mm_s=20.0)
+            self.stage.connect()
+            self.camera = MockCamera(
+                serial_number="MOCK-GUI-001", shape=(256, 320), seed=20260920,
+                position_provider=self.stage.get_signal_positions, capture_delay_s=0.025,
+            )
+            self.camera.connect()
+        else:
+            self.stage, self.camera = stage, camera
+            if not self.stage.is_connected:
+                self.stage.connect()
+            try:
+                if not self.camera.is_connected:
+                    self.camera.connect()
+            except Exception:
+                self.stage.disconnect()
+                raise
+        if self.device_mode == "REAL" and hasattr(self.stage, "objective_bounds_mm"):
+            self.config["objective_scan_bounds_mm"] = self.stage.objective_bounds_mm
+        if self.device_mode == "REAL":
+            self.config["exposure_ms"] = self.camera.get_exposure_us() / 1000.0
         self.bridge = Bridge()
         callbacks = SpatialCallbacks(
             on_state=self.bridge.state.emit,
@@ -140,8 +167,14 @@ class MainWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
-        banner = QtWidgets.QLabel("MOCK / 模拟数据 — 真实位移控制已禁用；停止按钮不是物理急停")
-        banner.setStyleSheet("background:#7a2f00;color:white;padding:8px;font-weight:700;")
+        if self.device_mode == "REAL":
+            banner_text = "REAL / 开环规划位置 — Stop 调用 GA_Stop；不自动 Home，物理停止手段仍应可用"
+            banner_color = "#9b1c1c"
+        else:
+            banner_text = "MOCK / 模拟数据 — 不连接真实硬件"
+            banner_color = "#7a2f00"
+        banner = QtWidgets.QLabel(banner_text)
+        banner.setStyleSheet(f"background:{banner_color};color:white;padding:8px;font-weight:700;")
         root.addWidget(banner)
         splitter = QtWidgets.QSplitter()
         root.addWidget(splitter, 1)
@@ -161,11 +194,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_status(root)
 
     def _build_device_group(self) -> None:
-        box = QtWidgets.QGroupBox("设备（安全 Mock）")
+        box = QtWidgets.QGroupBox("设备")
         form = QtWidgets.QFormLayout(box)
-        form.addRow("当前模式", QtWidgets.QLabel("MOCK（真实硬件入口未接入）"))
-        form.addRow("位移台", QtWidgets.QLabel("MockFiveAxisStage · 相机2轴 + 物镜3轴"))
-        form.addRow("扫描相机", QtWidgets.QLabel("MOCK-GUI-001 · Mono16"))
+        form.addRow("当前模式", QtWidgets.QLabel(self.device_mode))
+        form.addRow("位移台", QtWidgets.QLabel(type(self.stage).__name__))
+        form.addRow(
+            "扫描相机",
+            QtWidgets.QLabel(
+                f"{self.camera.get_model_name()} / {self.camera.get_serial_number()}"
+            ),
+        )
         self.exposure = spin(float(self.config["exposure_ms"]), minimum=0.01, maximum=10000, decimals=3)
         self.exposure.setSuffix(" ms")
         form.addRow("曝光时间", self.exposure)
@@ -203,10 +241,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_spins[axis] = target
             grid.addWidget(target, 5, column + 1)
         grid.addWidget(QtWidgets.QLabel("绝对目标"), 5, 0)
-        self.move_button = QtWidgets.QPushButton("移动到目标（Mock）")
+        self.move_button = QtWidgets.QPushButton("移动到目标")
         self.move_button.clicked.connect(self._move_to_targets)
         grid.addWidget(self.move_button, 6, 1, 1, 3)
-        note = QtWidgets.QLabel("* 轴号与方向已按现场观察录入；当前仍仅为 Mock，真实运动未开放")
+        note = QtWidgets.QLabel(
+            "* REAL 模式使用 GA_GetPrfPos 开环坐标；每条命令受 ±26 mm 软件范围、0.1 mm 单步和限位状态约束"
+            if self.device_mode == "REAL"
+            else "* 轴号与方向按现场观察录入；当前为 Mock"
+        )
         note.setWordWrap(True)
         note.setStyleSheet("color:#a85d00")
         grid.addWidget(note, 7, 0, 1, 4)
@@ -245,10 +287,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.camera_target_spins[axis] = target
             camera_grid.addWidget(target, 5, column + 1)
         camera_grid.addWidget(QtWidgets.QLabel("绝对目标"), 5, 0)
-        self.camera_move_button = QtWidgets.QPushButton("相机移动到目标（Mock）")
+        self.camera_move_button = QtWidgets.QPushButton("相机移动到目标")
         self.camera_move_button.clicked.connect(self._move_camera_to_targets)
         camera_grid.addWidget(self.camera_move_button, 6, 1, 1, 2)
-        camera_note = QtWidgets.QLabel("* 扫描期间锁定；Mock 光斑使用物镜横向位置 − 相机位置")
+        camera_note = QtWidgets.QLabel(
+            "* 扫描期间锁定；相机定位轴不参与扫描计划"
+            if self.device_mode == "REAL"
+            else "* 扫描期间锁定；Mock 光斑使用物镜横向位置 − 相机位置"
+        )
         camera_note.setWordWrap(True)
         camera_note.setStyleSheet("color:#a85d00")
         camera_grid.addWidget(camera_note, 7, 0, 1, 3)
@@ -314,14 +360,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_actions(self) -> None:
         box = QtWidgets.QGroupBox("运行与回读")
         grid = QtWidgets.QGridLayout(box)
-        self.start_button = QtWidgets.QPushButton("开始 Mock 扫描")
+        self.start_button = QtWidgets.QPushButton(f"开始 {self.device_mode} 扫描")
+        self.capture_current_button = QtWidgets.QPushButton("当前位置采集一张")
         self.pause_button = QtWidgets.QPushButton("暂停")
         self.resume_button = QtWidgets.QPushButton("继续")
         self.stop_button = QtWidgets.QPushButton("停止")
         self.open_button = QtWidgets.QPushButton("打开已有扫描目录…")
         grid.addWidget(self.start_button, 0, 0, 1, 2)
-        grid.addWidget(self.pause_button, 1, 0); grid.addWidget(self.resume_button, 1, 1)
-        grid.addWidget(self.stop_button, 2, 0, 1, 2); grid.addWidget(self.open_button, 3, 0, 1, 2)
+        grid.addWidget(self.capture_current_button, 1, 0, 1, 2)
+        grid.addWidget(self.pause_button, 2, 0); grid.addWidget(self.resume_button, 2, 1)
+        grid.addWidget(self.stop_button, 3, 0, 1, 2); grid.addWidget(self.open_button, 4, 0, 1, 2)
         self.left_layout.addWidget(box)
 
     def _build_right(self) -> QtWidgets.QWidget:
@@ -382,6 +430,7 @@ class MainWindow(QtWidgets.QMainWindow):
             elif isinstance(item, QtWidgets.QLineEdit): item.textChanged.connect(self._refresh_estimate)
             else: item.valueChanged.connect(self._refresh_estimate)
         self.start_button.clicked.connect(self.start_scan)
+        self.capture_current_button.clicked.connect(self.capture_current)
         self.pause_button.clicked.connect(self._pause)
         self.resume_button.clicked.connect(self.controller.resume)
         self.stop_button.clicked.connect(self.controller.request_stop)
@@ -416,7 +465,7 @@ class MainWindow(QtWidgets.QMainWindow):
         common = dict(
             save_root=Path(self.output_edit.text()).expanduser(), exposure_us=self.exposure.value() * 1000.0,
             settling_time_s=self.settling.value() / 1000.0, roi_xywh=tuple(item.value() for item in self.roi_spins),
-            metric=self.metric_combo.currentText(), experiment_name="gui_mock", camera_serial=self.camera.get_serial_number(),
+            metric=self.metric_combo.currentText(), experiment_name=f"gui_{self.device_mode.lower()}", camera_serial=self.camera.get_serial_number(),
             objective_bounds_mm=self.config.get("objective_scan_bounds_mm"),
         )
         kind = self.scan_type.currentText()
@@ -445,7 +494,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.plan_summary.setText("安全边界阻止扫描：" + "；".join(boundary_errors))
                 self.start_button.setEnabled(False)
             else:
-                suffix = "；软件边界未配置（仅 Mock）" if plan.objective_bounds_mm is None else "；已通过软件边界检查"
+                suffix = "；软件边界未配置" if plan.objective_bounds_mm is None else "；已通过软件边界检查"
                 self.plan_summary.setStyleSheet("color:#a85d00" if plan.objective_bounds_mm is None else "")
                 self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV/MAT 开销）{suffix}")
                 self.start_button.setEnabled(self._thread is None)
@@ -457,8 +506,35 @@ class MainWindow(QtWidgets.QMainWindow):
     def start_scan(self) -> None:
         try:
             plan = self._plan_from_controls()
+        except Exception as exc:
+            self._on_failed(str(exc)); return
+        self._start_plan(plan)
+
+    def capture_current(self) -> None:
+        try:
+            current = self.stage.get_positions()
+            plan = SpatialScanPlan.from_axis_list(
+                axis="X",
+                values=[current["X"]],
+                fixed_positions_mm=current,
+                save_root=Path(self.output_edit.text()).expanduser(),
+                exposure_us=self.exposure.value() * 1000.0,
+                settling_time_s=self.settling.value() / 1000.0,
+                roi_xywh=tuple(item.value() for item in self.roi_spins),
+                metric=self.metric_combo.currentText(),
+                experiment_name=f"gui_{self.device_mode.lower()}_current_capture",
+                camera_serial=self.camera.get_serial_number(),
+                objective_bounds_mm=self.config.get("objective_scan_bounds_mm"),
+            )
+        except Exception as exc:
+            self._on_failed(str(exc)); return
+        self._start_plan(plan)
+
+    def _start_plan(self, plan: SpatialScanPlan) -> None:
+        try:
             problems = self.controller.preflight(plan, image_shape=self.camera.image_shape)
-            if problems: raise ValueError("；".join(problems))
+            if problems:
+                raise ValueError("；".join(problems))
         except Exception as exc:
             self._on_failed(str(exc)); return
         self._plan = plan; self._session = None; self._records.clear(); self._images.clear(); self._last_session_dir = None
@@ -482,6 +558,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_move_button.setEnabled(not locked)
         self.open_button.setEnabled(not locked)
         self.start_button.setEnabled(not locked)
+        self.capture_current_button.setEnabled(not locked)
         self.pause_button.setEnabled(locked); self.resume_button.setEnabled(locked); self.stop_button.setEnabled(locked)
 
     def _pause(self) -> None:
@@ -507,8 +584,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.camera_position_labels[axis].setText(f"{value:.4f} mm")
 
     def _update_all_positions(self) -> None:
-        self._update_position(self.stage.get_positions())
-        self._update_camera_position(self.stage.get_camera_positions())
+        objective = self.stage.get_positions()
+        camera = self.stage.get_camera_positions()
+        self._update_position(objective)
+        self._update_camera_position(camera)
+        for axis, value in objective.items():
+            if axis in self.target_spins:
+                self.target_spins[axis].setValue(value)
+        for axis, value in camera.items():
+            if axis in self.camera_target_spins:
+                self.camera_target_spins[axis].setValue(value)
 
     @QtCore.Slot(object, object)
     def _on_point_saved(self, record: dict[str, object], image: np.ndarray) -> None:

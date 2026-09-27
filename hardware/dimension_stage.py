@@ -20,7 +20,6 @@ from .stage_safety import (
     AxisCalibration,
     StageCapabilities,
     StageSafetyError,
-    UnsupportedStageOperation,
     axis_status_motion_errors,
     decode_axis_status,
 )
@@ -37,6 +36,39 @@ class StageAccessLevel(IntEnum):
     DLL_LOADED = 0
     READ_ONLY_CONNECTED = 1
     MOTION_READY = 2
+
+
+@dataclass(frozen=True)
+class HomeParameters:
+    """ETH_GAS_N 自动回零参数；只有显式调用 ``home()`` 才会使用。"""
+
+    mode: int = 1
+    direction: int = 0
+    offset_pulse: int = 0
+    rapid_velocity_pulse_per_ms: float = 3.0
+    locate_velocity_pulse_per_ms: float = 1.0
+    index_velocity_pulse_per_ms: float = 1.0
+    acceleration_pulse_per_ms2: float = 0.5
+    index_distance_pulse: int = 0
+    back_distance_pulse: int = 0
+    delay_before_zero_ms: int = 0
+
+    def __post_init__(self) -> None:
+        if self.mode not in {1, 2, 3, 11, 21, 31, 41}:
+            raise ValueError("Home mode 必须是 1/2/3/11/21/31/41")
+        if self.direction not in {0, 1}:
+            raise ValueError("Home direction 必须是 0（负向）或 1（正向）")
+        for name in (
+            "rapid_velocity_pulse_per_ms",
+            "locate_velocity_pulse_per_ms",
+            "index_velocity_pulse_per_ms",
+            "acceleration_pulse_per_ms2",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} 必须是有限正数")
+        if self.delay_before_zero_ms < 0:
+            raise ValueError("delay_before_zero_ms 不能为负数")
 
 
 @dataclass(frozen=True)
@@ -61,6 +93,7 @@ class DimensionStageConfig:
     allow_motion: bool = False
     position_tolerance_pulse: float = 1.0
     healthy_raw_status_values: frozenset[int] | None = None
+    home_parameters: HomeParameters | None = None
 
     def __post_init__(self) -> None:
         positive_values = {
@@ -152,8 +185,35 @@ class DimensionStage(StageBase):
             ctypes.POINTER(ctypes.c_long),
         ]
         dll.GA_GetSoftLimit.restype = ctypes.c_int
+        dll.GA_SetSoftLimit.argtypes = [ctypes.c_short, ctypes.c_long, ctypes.c_long]
+        dll.GA_SetSoftLimit.restype = ctypes.c_int
+        dll.GA_LmtsOn.argtypes = [ctypes.c_short, ctypes.c_short]
+        dll.GA_LmtsOn.restype = ctypes.c_int
         dll.GA_Stop.argtypes = [ctypes.c_long, ctypes.c_long]
         dll.GA_Stop.restype = ctypes.c_int
+        dll.GA_HomeSetPrmSingle.argtypes = [
+            ctypes.c_short,
+            ctypes.c_short,
+            ctypes.c_short,
+            ctypes.c_long,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_double,
+            ctypes.c_long,
+            ctypes.c_long,
+            ctypes.c_short,
+        ]
+        dll.GA_HomeSetPrmSingle.restype = ctypes.c_int
+        dll.GA_HomeStart.argtypes = [ctypes.c_short]
+        dll.GA_HomeStart.restype = ctypes.c_int
+        dll.GA_HomeStop.argtypes = [ctypes.c_short]
+        dll.GA_HomeStop.restype = ctypes.c_int
+        dll.GA_HomeGetSts.argtypes = [
+            ctypes.c_short,
+            ctypes.POINTER(ctypes.c_ushort),
+        ]
+        dll.GA_HomeGetSts.restype = ctypes.c_int
         dll.GA_AxisOn.argtypes = [ctypes.c_short]
         dll.GA_AxisOn.restype = ctypes.c_int
         dll.GA_PrfTrap.argtypes = [ctypes.c_short]
@@ -283,6 +343,23 @@ class DimensionStage(StageBase):
         )
         return int(positive.value), int(negative.value)
 
+    def set_soft_limits_pulse(self, positive: int, negative: int) -> None:
+        """写入控制器软限位；正限位必须大于负限位。"""
+
+        if positive <= negative:
+            raise ValueError("positive soft limit 必须大于 negative soft limit")
+        dll = self._require_connected()
+        self._check(
+            dll.GA_SetSoftLimit(self._axis_id(), int(positive), int(negative)),
+            "GA_SetSoftLimit",
+        )
+
+    def enable_hard_limits(self) -> None:
+        """启用当前轴的正、负硬限位输入；不改变限位输入极性。"""
+
+        dll = self._require_connected()
+        self._check(dll.GA_LmtsOn(self._axis_id(), -1), "GA_LmtsOn")
+
     def get_position_mm(self) -> float:
         """读取控制器规划位置并用已确认标定转换为物理 mm。"""
         missing = self.config.calibration.conversion_errors()
@@ -327,8 +404,6 @@ class DimensionStage(StageBase):
             errors.append("GA_GetSts 状态位含义尚未确认")
         if self.config.capabilities.stop_supported is not True:
             errors.append("Stop API 尚未确认并实现")
-        if self.config.capabilities.home_supported is not True:
-            errors.append("Home API/流程尚未确认并实现")
         if self.config.capabilities.positive_limit_supported is not True:
             errors.append("正限位读取 API 尚未确认并实现")
         if self.config.capabilities.negative_limit_supported is not True:
@@ -447,7 +522,43 @@ class DimensionStage(StageBase):
 
     def home(self) -> None:
         self.config.capabilities.require("home_supported", "Home")
-        raise UnsupportedStageOperation("Home API 签名尚未实现")
+        parameters = self.config.home_parameters
+        if parameters is None:
+            raise StageSafetyError("未配置 HomeParameters；不会自动执行回零")
+        dll = self._require_connected()
+        axis_id = self._axis_id()
+        self._check(
+            dll.GA_HomeSetPrmSingle(
+                axis_id,
+                parameters.mode,
+                parameters.direction,
+                parameters.offset_pulse,
+                parameters.rapid_velocity_pulse_per_ms,
+                parameters.locate_velocity_pulse_per_ms,
+                parameters.index_velocity_pulse_per_ms,
+                parameters.acceleration_pulse_per_ms2,
+                parameters.index_distance_pulse,
+                parameters.back_distance_pulse,
+                parameters.delay_before_zero_ms,
+            ),
+            "GA_HomeSetPrmSingle",
+        )
+        self._check(dll.GA_HomeStart(axis_id), "GA_HomeStart")
+
+    def get_home_status(self) -> int:
+        """返回 0=未回零、1=回零中、2=回零成功。"""
+
+        dll = self._require_connected()
+        status = ctypes.c_ushort(0)
+        self._check(
+            dll.GA_HomeGetSts(self._axis_id(), ctypes.byref(status)),
+            "GA_HomeGetSts",
+        )
+        return int(status.value)
+
+    def stop_home(self) -> None:
+        dll = self._require_connected()
+        self._check(dll.GA_HomeStop(self._axis_id()), "GA_HomeStop")
 
     def get_positive_limit_active(self) -> bool:
         self.config.capabilities.require("positive_limit_supported", "读取正限位")

@@ -13,8 +13,8 @@ Copy-Item .\hardware_profile.example.json .\hardware_local.json
 notepad .\hardware_local.json
 ```
 
-`hardware_local.json` 已被 `.gitignore` 排除，不会随普通 `git add` 上传。示例中的
-`null` 表示尚未由现场确认，不能为了通过检查而填写估计值。
+`hardware_local.json` 已被 `.gitignore` 排除，不会随普通 `git add` 上传。轴 1..5 的标定空值
+会采用随厂家控制软件提供的 `SysParam.xml` 数值；连接路径、IP 和相机序号仍必须在实验电脑填写。
 
 相机参数含义：
 
@@ -25,10 +25,9 @@ notepad .\hardware_local.json
 - `inter_frame_delay_ms`：保存帧之间的额外等待；
 - `frames`：保存的诊断帧数，不包含丢弃帧。
 
-位移台每轴的 `travel_*`、`home_position_mm` 和 `max_single_step_mm` 必须来自现场记录或
-厂家资料。旧配置中的 `healthy_raw_status_values` 仅为向后兼容保留，当前安全门已经依据
-ETH_GAS_N V7.3 手册逐位判断状态。`direction_sign` 和文字映射来自已经记录的人工方向观察，
-但它们不能替代逐轴 pulse/mm、行程和零点验证。
+位移台轴 1..5 默认采用厂家控制软件的 `10000 pulse/mm`、`±26 mm` 和控制器零点坐标，
+`max_single_step_mm=0.1` 是本项目首次验收限制。旧配置中的 `healthy_raw_status_values` 仅为
+向后兼容保留，当前安全门依据 ETH_GAS_N V7.3 手册逐位判断状态。
 
 ## 2. 相机多帧诊断（不访问位移台）
 
@@ -92,10 +91,10 @@ Stop、Zero、清报警、设置限位或任何其他状态修改 API；报告�
   --config .\hardware_local.json
 ```
 
-此命令不加载 DLL、不连接设备、不移动。每个 `BLOCKED` 都是进入受监督最小运动前必须
-解决的项目。状态位、Stop 签名、限位解释和轴启动 mask 已有手册依据；当前仍会因自动
-Home 流程未验收、逐轴标定/零点/行程和 `max_single_step_mm` 不完整而返回退出码 2。
-这是预期结果，不是测试程序故障。
+此命令不加载 DLL、不连接设备、不移动。轴 1..5 的空值会依据厂家控制软件
+`SysParam.xml` 补为 `10000 pulse/mm`、`±26 mm`、控制器零点 `0 mm` 和本项目首次验收单步
+上限 `0.1 mm`。Home 不再是点位运动前置条件。如果连接路径和 IP 已配置，审计应显示
+`READY_FOR_SUPERVISED_MINIMAL_MOTION`；仍有 `BLOCKED` 时不要进入 REAL GUI。
 
 完整 `pytest` 中有一项可选的厂家 DLL 加载检查。开发机仓库上级若没有
 `positioner/GAS.dll`，该检查会显示为 `skipped`；Fake DLL 测试仍会覆盖签名绑定和调用顺序。
@@ -112,11 +111,23 @@ Home 流程未验收、逐轴标定/零点/行程和 `max_single_step_mm` 不完
   --delta-mm 0.001
 ```
 
-当前版本应在访问硬件前被安全门拒绝。只有完整逐轴标定、机械/软件范围、零点、现场回零
-流程和 `max_single_step_mm` 全部确认后，程序才可能进入执行分支。
-不要通过改脚本或伪造配置绕过 `BLOCKED`。未来获准执行时还必须显式提供
+静态预检通过后仍不会连接或移动。若使用这个独立入口执行运动，还必须显式提供
 `--execute-supervised-motion` 与 `--confirm-physical-stop-ready`，并在终端再次手工输入精确
 目标确认文字。
+
+## 6. 现有 GUI 的 REAL 模式
+
+```powershell
+.\.venv\Scripts\python.exe -m gui.app `
+  --real `
+  --hardware-config .\hardware_local.json `
+  --confirm-real-motion
+```
+
+启动后先核对五轴当前位置，再点击“当前位置采集一张”；该操作不产生位移。第一次运动把
+物镜和相机手动步长都改成 `0.001 mm`，每次只点一个方向一次。REAL 模式不使用编码器反馈，
+不自动 Home；它在连接时写入 `±260000 pulse` 软限位、启用正负硬限位，并在每条命令前检查
+`±26 mm` 软件范围、`0.1 mm` 单步上限和状态位。
 
 ## 结果判读与上报
 

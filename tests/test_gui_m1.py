@@ -87,6 +87,24 @@ def test_gui_disables_start_when_plan_exceeds_configured_boundary(tmp_path: Path
         window.close(); app.processEvents()
 
 
+def test_gui_accepts_explicit_real_device_injection(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stage = MockXYZStage(speed_mm_s=1000.0)
+    camera = MockCamera(shape=(32, 40))
+    window = MainWindow(
+        config_path=tmp_path / "configuration.json",
+        stage=stage,
+        camera=camera,
+        device_mode="REAL",
+    )
+    try:
+        assert "REAL" in window.windowTitle()
+        assert stage.is_connected and camera.is_connected
+        assert window._plan_from_controls().experiment_name == "gui_real"
+    finally:
+        window.close(); app.processEvents()
+
+
 def test_gui_reopens_saved_raw_image(tmp_path: Path) -> None:
     stage = MockXYZStage(speed_mm_s=1000); stage.connect()
     camera = MockCamera(shape=(32, 40), position_provider=stage.get_positions); camera.connect()
