@@ -250,8 +250,14 @@ REAL 模式使用厂家配置的开环规划位置；它不声称完成编码器
 
 GUI-M1 的二维 raster 约定为 `heatmap[row, col] = [纵轴, 横轴]`，图像变换把像素中心对齐到
 计划坐标。主图的零值、未采集 `NaN` 和错误日志互不混淆；选点只浏览数据，不提交移动。
-每次扫描结束生成 `scan_data.mat`，其中包含坐标、状态、ROI 指标矩阵和 TIFF 相对路径；
-原始像素仍只保存在 TIFF，避免重复占用空间。旧目录可用 `scripts/export_scan_mat.py` 补导出。
+每个扫描点同时生成 `point_XXXXXX_raw.tif` 和 `point_XXXXXX_raw.mat`；逐帧 MAT 的 `image`
+变量直接包含原始像素。扫描目录根部另有 `scan_data.mat`，汇总坐标、状态、ROI 指标矩阵、
+TIFF 和逐帧 MAT 的相对路径。旧目录可用 `scripts/export_scan_mat.py` 补导出汇总 MAT。
+
+GUI 中的起点、终点、步长、位置列表和固定轴值都表示“相对于点击开始时物镜位置的偏移”。
+二维扫描采用蛇形顺序，避免每次换行时从正端跳回负端。正常扫描完成后，物镜按每条最多
+`0.001 mm` 的小步返回扫描开始位置；停止或故障后不会自动继续运动。错误文本可直接选中，
+也可点击“复制错误”写入剪贴板。
 完整人工验收步骤见 [GUI_M1_ACCEPTANCE.md](GUI_M1_ACCEPTANCE.md)。
 
 ## 只读验证真实位移台

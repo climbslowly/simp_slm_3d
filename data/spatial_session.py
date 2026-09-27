@@ -26,7 +26,8 @@ SPATIAL_LOG_COLUMNS = [
     "camera_source", "camera_serial", "camera_model", "exposure_us",
     "pixel_format", "roi_x", "roi_y", "roi_width", "roi_height",
     "metric_name", "metric_value", "roi_mean", "roi_sum", "image_max",
-    "saturation_fraction", "saturation_threshold", "filename", "status", "error_message",
+    "saturation_fraction", "saturation_threshold", "filename", "mat_filename",
+    "status", "error_message",
 ]
 
 
@@ -107,6 +108,9 @@ class SpatialDataManager:
         self._writer: csv.DictWriter | None = None
         self._axis_mapping_id = "unavailable"
         self._direction_mapping_status = "unavailable"
+        self._position_source = "unavailable"
+        self._device_mode = "UNKNOWN"
+        self._camera_source = "unknown"
 
     def open(self, *, stage_info: dict[str, object], camera_info: dict[str, object]) -> Path:
         self.plan.save_root.mkdir(parents=True, exist_ok=True)
@@ -118,16 +122,19 @@ class SpatialDataManager:
             suffix += 1
         session.mkdir()
         self.session_dir = session
+        self._position_source = str(stage_info.get("position_source", "unavailable"))
+        self._device_mode = str(stage_info.get("mode", "UNKNOWN"))
+        self._camera_source = str(camera_info.get("source", "unknown"))
         config = self.plan.to_dict()
         config.update({
             "schema_version": 1,
             "software_version": "GUI-M1",
             "scan_id": self.scan_id,
             "start_time_utc": utc_now(),
-            "device_mode": "MOCK",
+            "device_mode": self._device_mode,
             "stage": stage_info,
             "camera_info": camera_info,
-            "position_meaning": "mock_simulated; not encoder feedback",
+            "position_meaning": self._position_source,
         })
         self._axis_mapping_id = str(stage_info.get("axis_mapping_id", "unavailable"))
         self._direction_mapping_status = str(stage_info.get("axis_mapping_status", "unavailable"))
@@ -154,6 +161,7 @@ class SpatialDataManager:
         camera_dir = self.session_dir / f"Camera_{safe_serial}"
         camera_dir.mkdir(exist_ok=True)
         final_path = camera_dir / f"point_{point.point_id:06d}_raw.tif"
+        matlab_path = camera_dir / f"point_{point.point_id:06d}_raw.mat"
         handle, temporary_name = tempfile.mkstemp(prefix=".partial_", suffix=".tif", dir=camera_dir)
         os.close(handle)
         try:
@@ -166,8 +174,9 @@ class SpatialDataManager:
                 pass
             raise
         x, y, width, height = self.plan.roi_xywh
+        capture_time = utc_now()
         row: dict[str, object] = {
-            "timestamp_utc": utc_now(), "scan_id": self.scan_id,
+            "timestamp_utc": capture_time, "scan_id": self.scan_id,
             "point_id": point.point_id, "order_index": point.order_index,
             "row": "" if point.row is None else point.row,
             "col": "" if point.col is None else point.col,
@@ -176,16 +185,47 @@ class SpatialDataManager:
             "direction_mapping_status": self._direction_mapping_status,
             **{f"target_{axis.lower()}_mm": point.targets_mm[axis] for axis in ("X", "Y", "Z")},
             **{f"actual_{axis.lower()}_mm": actual_mm[axis] for axis in ("X", "Y", "Z")},
-            "position_source": "mock_simulated", "camera_source": "mock",
+            "position_source": self._position_source, "camera_source": self._camera_source,
             "camera_x_mm": camera_positions_mm["X"], "camera_y_mm": camera_positions_mm["Y"],
-            "camera_position_source": "mock_simulated",
+            "camera_position_source": self._position_source,
             "camera_serial": self.plan.camera_serial, "camera_model": camera_model,
             "exposure_us": self.plan.exposure_us, "pixel_format": str(image.dtype),
             "roi_x": x, "roi_y": y, "roi_width": width, "roi_height": height,
             "metric_name": self.plan.metric, **metrics,
             "filename": os.path.relpath(final_path, self.session_dir),
+            "mat_filename": os.path.relpath(matlab_path, self.session_dir),
             "status": "ok", "error_message": "",
         }
+        try:
+            _write_frame_mat(
+                matlab_path,
+                image,
+                {
+                    "point_id": point.point_id,
+                    "scan_id": self.scan_id,
+                    "device_mode": self._device_mode,
+                    "position_source": self._position_source,
+                    "camera_serial": self.plan.camera_serial,
+                    "camera_model": camera_model,
+                    "image_shape": list(image.shape),
+                    "image_dtype": str(image.dtype),
+                    "target_xyz_mm": [point.targets_mm[axis] for axis in ("X", "Y", "Z")],
+                    "actual_xyz_mm": [actual_mm[axis] for axis in ("X", "Y", "Z")],
+                    "camera_xy_mm": [camera_positions_mm[axis] for axis in ("X", "Y")],
+                    "roi_xywh": list(self.plan.roi_xywh),
+                    "metric_name": self.plan.metric,
+                    "metric_value": metrics["metric_value"],
+                    "exposure_us": self.plan.exposure_us,
+                    "capture_time_utc": capture_time,
+                    "tiff_relative_path": row["filename"],
+                },
+            )
+        except Exception:
+            try:
+                final_path.unlink()
+            except OSError:
+                pass
+            raise
         self._writer.writerow(row)
         self._file.flush()
         # 私有运行时字段不写入 CSV，仅让 GUI 在扫描进行中按需回读旧图。
@@ -204,7 +244,7 @@ class SpatialDataManager:
             "axis_mapping_id": self._axis_mapping_id,
             "direction_mapping_status": self._direction_mapping_status,
             **{f"target_{axis.lower()}_mm": point.targets_mm[axis] for axis in ("X", "Y", "Z")},
-            "position_source": "unavailable", "camera_source": "mock",
+            "position_source": "unavailable", "camera_source": self._camera_source,
             "camera_serial": self.plan.camera_serial, "exposure_us": self.plan.exposure_us,
             "status": status, "error_message": message,
         }
@@ -221,7 +261,7 @@ class SpatialDataManager:
         self._writer = None
 
     def export_mat(self) -> Path:
-        """关闭 CSV 后生成扫描级 MAT；TIFF 仍是唯一原始像素副本。"""
+        """关闭 CSV 后生成扫描级汇总 MAT；逐帧 MAT 已各自包含原图。"""
         self.close()
         if self.session_dir is None:
             raise RuntimeError("数据会话尚未打开")
@@ -290,7 +330,9 @@ def export_spatial_session_mat(directory: Path) -> Path:
     errors: list[object] = [""] * total
     timestamps: list[object] = [""] * total
     filenames: list[object] = [""] * total
+    mat_filenames: list[object] = [""] * total
     image_file_exists = np.zeros((total, 1), dtype=np.uint8)
+    mat_file_exists = np.zeros((total, 1), dtype=np.uint8)
     position_sources: list[object] = ["unavailable"] * total
 
     id_to_index: dict[int, int] = {}
@@ -322,6 +364,11 @@ def export_spatial_session_mat(directory: Path) -> Path:
         if filenames[index]:
             image_file_exists[index, 0] = int(
                 (session.directory / _relative_image_path(filenames[index])).is_file()
+            )
+        mat_filenames[index] = record.get("mat_filename", "")
+        if mat_filenames[index]:
+            mat_file_exists[index, 0] = int(
+                (session.directory / _relative_image_path(mat_filenames[index])).is_file()
             )
         position_sources[index] = record.get("position_source", "unavailable")
         actual_xyz[index, :] = [
@@ -411,6 +458,8 @@ def export_spatial_session_mat(directory: Path) -> Path:
         "timestamp_utc": _string_column(timestamps),
         "image_relative_path": _string_column(filenames),
         "image_file_exists": image_file_exists,
+        "frame_mat_relative_path": _string_column(mat_filenames),
+        "frame_mat_file_exists": mat_file_exists,
         "metric_name": str(config.get("metric", "")),
         "metric_value": metric_value,
         "metric_grid": metric_grid,
@@ -438,7 +487,7 @@ def export_spatial_session_mat(directory: Path) -> Path:
             )
         ),
         "raw_images_embedded": np.uint8(0),
-        "raw_image_format": "TIFF",
+        "raw_image_format": "TIFF plus one image-containing MAT per frame",
         "config_json": json.dumps(config, ensure_ascii=False),
         "mat_created_time_utc": utc_now(),
     }
@@ -462,3 +511,46 @@ def export_spatial_session_mat(directory: Path) -> Path:
             pass
         raise
     return output
+
+
+def _write_frame_mat(path: Path, image: np.ndarray, metadata: dict[str, object]) -> None:
+    """原子保存逐帧 MATLAB 文件；其中直接包含原始图像矩阵。"""
+
+    try:
+        from scipy.io import savemat
+    except ImportError as exc:
+        raise RuntimeError("保存逐帧 .mat 需要 scipy；请安装 requirements.txt") from exc
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.stem}_", suffix=".mat", dir=path.parent
+    )
+    os.close(handle)
+    try:
+        savemat(
+            temporary_name,
+            {
+                "image": image,
+                "point_id": np.int64(metadata["point_id"]),
+                "target_xyz_mm": np.asarray(metadata["target_xyz_mm"], dtype=np.float64),
+                "actual_xyz_mm": np.asarray(metadata["actual_xyz_mm"], dtype=np.float64),
+                "camera_xy_mm": np.asarray(metadata["camera_xy_mm"], dtype=np.float64),
+                "roi_xywh": np.asarray(metadata["roi_xywh"], dtype=np.int64),
+                "metric_name": str(metadata["metric_name"]),
+                "metric_value": float(metadata["metric_value"]),
+                "exposure_us": float(metadata["exposure_us"]),
+                "camera_serial": str(metadata["camera_serial"]),
+                "camera_model": str(metadata["camera_model"]),
+                "image_shape": np.asarray(metadata["image_shape"], dtype=np.int64),
+                "image_dtype": str(metadata["image_dtype"]),
+                "capture_time_utc": str(metadata["capture_time_utc"]),
+                "tiff_relative_path": str(metadata["tiff_relative_path"]),
+                "metadata_json": json.dumps(metadata, ensure_ascii=False),
+            },
+            do_compression=True,
+        )
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise

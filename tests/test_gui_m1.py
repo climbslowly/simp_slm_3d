@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -7,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets
 
 from PySide6 import QtTest
+import pytest
 
 from gui.configuration import DEFAULT_CONFIG, load_config
 from gui.main_window import MainWindow
@@ -101,6 +103,43 @@ def test_gui_accepts_explicit_real_device_injection(tmp_path: Path) -> None:
         assert "REAL" in window.windowTitle()
         assert stage.is_connected and camera.is_connected
         assert window._plan_from_controls().experiment_name == "gui_real"
+    finally:
+        window.close(); app.processEvents()
+
+
+def test_gui_builds_relative_serpentine_plan_and_copies_errors(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stage = MockXYZStage(speed_mm_s=1000.0)
+    stage.connect()
+    stage.move_absolute({"X": 3.6806, "Y": -3.2516, "Z": 1.6478})
+    while stage.is_moving():
+        time.sleep(0.001)
+    camera = MockCamera(shape=(32, 40))
+    camera.connect()
+    window = MainWindow(
+        config_path=tmp_path / "configuration.json",
+        stage=stage,
+        camera=camera,
+        device_mode="REAL",
+    )
+    try:
+        window.scan_type.setCurrentText("XY")
+        for controls in (window.axis1, window.axis2):
+            for widget, value in zip(controls, (-0.1, 0.1, 0.05)):
+                widget.setValue(value)
+        for widget, value in zip(window.roi_spins, (0, 0, 10, 10)):
+            widget.setValue(value)
+        window.fixed.setValue(0.0)
+        plan = window._plan_from_controls()
+        assert plan.points[0].targets_mm == pytest.approx(
+            {"X": 3.5806, "Y": -3.3516, "Z": 1.6478}
+        )
+        assert plan.return_to_start and plan.return_step_mm == 0.001
+        assert not window.controller.preflight(plan, image_shape=camera.image_shape)
+
+        window._on_failed("可复制的测试错误")
+        window.copy_error_button.click()
+        assert app.clipboard().text() == "可复制的测试错误"
     finally:
         window.close(); app.processEvents()
 

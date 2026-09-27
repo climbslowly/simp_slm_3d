@@ -11,6 +11,7 @@ from hardware.diagnostic_profile import load_hardware_diagnostic_profile
 from hardware.dimension_stage import DimensionStage
 from hardware.gas_five_axis_stage import GasFiveAxisStage
 from hardware.stage_safety import StageSafetyError
+from scan.spatial_scan import SpatialScanPlan
 
 
 class FakeFunction:
@@ -100,6 +101,9 @@ def test_vendor_defaults_map_planned_pulses_to_gui_coordinates(tmp_path: Path) -
         "Y": [-26.0, 26.0],
         "Z": [-26.0, 26.0],
     }
+    info = stage.device_info()
+    assert info["axis_mapping"]["objective"]["Y"]["controller_axis"] == 5
+    assert info["axis_mapping"]["objective"]["Y"]["controller_sign_for_gui_positive"] == -1
 
 
 def test_real_connect_writes_soft_limits_and_enables_hard_limits(
@@ -149,3 +153,26 @@ def test_triggered_limit_blocks_toward_limit_but_allows_retreat(tmp_path: Path) 
     retreat["X"] -= 0.01
     stage.move_absolute(retreat)
     assert fake.GA_Update.arguments[-1] == (4,)
+
+
+def test_relative_serpentine_scan_has_no_large_first_or_row_transition_step(
+    tmp_path: Path,
+) -> None:
+    stage, _fake = connected_stage(tmp_path)
+    origin = stage.get_positions()
+    plan = SpatialScanPlan.from_plane(
+        plane="XY",
+        horizontal_start=-0.1,
+        horizontal_stop=0.1,
+        horizontal_step=0.05,
+        vertical_start=-0.1,
+        vertical_stop=0.1,
+        vertical_step=0.05,
+        fixed_value_mm=0.0,
+        relative_origin_mm=origin,
+        serpentine=True,
+        save_root=tmp_path,
+        roi_xywh=(0, 0, 1, 1),
+    )
+    assert stage.plan_errors(plan.points) == []
+    assert plan.points[0].targets_mm["Z"] == pytest.approx(origin["Z"])

@@ -35,6 +35,37 @@ def test_plane_axis_mapping(tmp_path, plane, horizontal, vertical, fixed) -> Non
     assert plan.points[-1].targets_mm == {horizontal: 2.0, vertical: 4.0, fixed: 9.0}
 
 
+def test_relative_serpentine_plane_uses_scan_start_as_origin(tmp_path) -> None:
+    origin = {"X": 3.6806, "Y": -3.2516, "Z": 1.6478}
+    plan = SpatialScanPlan.from_plane(
+        plane="XY",
+        horizontal_start=-0.1,
+        horizontal_stop=0.1,
+        horizontal_step=0.05,
+        vertical_start=-0.1,
+        vertical_stop=0.1,
+        vertical_step=0.05,
+        fixed_value_mm=0.0,
+        relative_origin_mm=origin,
+        serpentine=True,
+        **common(tmp_path),
+    )
+    assert plan.coordinate_mode == "RELATIVE_TO_SCAN_START"
+    assert plan.origin_positions_mm == origin
+    assert plan.points[0].targets_mm == pytest.approx(
+        {"X": 3.5806, "Y": -3.3516, "Z": 1.6478}
+    )
+    # 奇数行反向，避免从 +0.1 跳回 -0.1。
+    assert [(point.row, point.col) for point in plan.points[5:10]] == [
+        (1, 4), (1, 3), (1, 2), (1, 1), (1, 0)
+    ]
+    for previous, current in zip(plan.points, plan.points[1:]):
+        assert max(
+            abs(current.targets_mm[axis] - previous.targets_mm[axis])
+            for axis in ("X", "Y", "Z")
+        ) <= 0.05 + 1e-12
+
+
 def test_range_endpoint_rule_and_invalid_values() -> None:
     assert decimal_range(0, 1, 0.3) == [0.0, 0.3, 0.6, 0.9]
     assert decimal_range(1, 0, -0.5) == [1.0, 0.5, 0.0]

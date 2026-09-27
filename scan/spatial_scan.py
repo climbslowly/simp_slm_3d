@@ -64,6 +64,10 @@ class SpatialScanPlan:
     fixed_axis: str | None = None
     fixed_value_mm: float | None = None
     objective_bounds_mm: dict[str, list[float]] | None = None
+    coordinate_mode: str = "ABSOLUTE"
+    origin_positions_mm: dict[str, float] | None = None
+    return_to_start: bool = False
+    return_step_mm: float = 0.001
 
     def __post_init__(self) -> None:
         self.save_root = Path(self.save_root)
@@ -79,6 +83,17 @@ class SpatialScanPlan:
             raise ValueError("运动超时必须是有限正数")
         if self.metric not in {"mean", "sum"}:
             raise ValueError("指标只能是 mean 或 sum")
+        if self.coordinate_mode not in {"ABSOLUTE", "RELATIVE_TO_SCAN_START"}:
+            raise ValueError("coordinate_mode 必须是 ABSOLUTE 或 RELATIVE_TO_SCAN_START")
+        if self.origin_positions_mm is not None:
+            if set(self.origin_positions_mm) != set(AXES):
+                raise ValueError("扫描起始位置必须完整包含 X/Y/Z")
+            if not all(math.isfinite(float(value)) for value in self.origin_positions_mm.values()):
+                raise ValueError("扫描起始位置必须是有限数值")
+        if self.coordinate_mode == "RELATIVE_TO_SCAN_START" and self.origin_positions_mm is None:
+            raise ValueError("相对扫描计划缺少扫描起始位置")
+        if not math.isfinite(self.return_step_mm) or self.return_step_mm <= 0:
+            raise ValueError("复位步长必须是有限正数")
         x, y, width, height = self.roi_xywh
         if min(x, y) < 0 or min(width, height) <= 0:
             raise ValueError("ROI 必须位于非负像素坐标且宽高为正")
@@ -143,6 +158,8 @@ class SpatialScanPlan:
         vertical_stop: float | str,
         vertical_step: float | str,
         fixed_value_mm: float,
+        relative_origin_mm: dict[str, float] | None = None,
+        serpentine: bool = False,
         **kwargs: object,
     ) -> "SpatialScanPlan":
         plane = plane.upper()
@@ -155,11 +172,27 @@ class SpatialScanPlan:
         if len(horizontal) * len(vertical) > MAX_GUI_POINTS:
             raise ValueError(f"扫描点数超过 GUI-M1 上限 {MAX_GUI_POINTS}")
         points: list[SpatialPoint] = []
+        if relative_origin_mm is not None:
+            if set(relative_origin_mm) != set(AXES):
+                raise ValueError("相对扫描起始位置必须完整包含 X/Y/Z")
+            origin = {axis: float(relative_origin_mm[axis]) for axis in AXES}
+        else:
+            origin = None
         for row, vertical_value in enumerate(vertical):
-            for col, horizontal_value in enumerate(horizontal):
-                targets = {axis: float(fixed_value_mm) for axis in AXES}
-                targets[horizontal_axis] = horizontal_value
-                targets[vertical_axis] = vertical_value
+            columns = range(len(horizontal))
+            if serpentine and row % 2:
+                columns = reversed(range(len(horizontal)))
+            for col in columns:
+                horizontal_value = horizontal[col]
+                if origin is None:
+                    targets = {axis: float(fixed_value_mm) for axis in AXES}
+                    targets[horizontal_axis] = horizontal_value
+                    targets[vertical_axis] = vertical_value
+                else:
+                    targets = dict(origin)
+                    targets[horizontal_axis] += horizontal_value
+                    targets[vertical_axis] += vertical_value
+                    targets[fixed_axis] += float(fixed_value_mm)
                 points.append(
                     SpatialPoint(
                         point_id=len(points) + 1,
@@ -178,6 +211,10 @@ class SpatialScanPlan:
             vertical_values=vertical,
             fixed_axis=fixed_axis,
             fixed_value_mm=float(fixed_value_mm),
+            coordinate_mode=(
+                "RELATIVE_TO_SCAN_START" if origin is not None else "ABSOLUTE"
+            ),
+            origin_positions_mm=origin,
             **kwargs,
         )
 
@@ -208,6 +245,7 @@ class SpatialScanPlan:
         values: list[float],
         fixed_positions_mm: dict[str, float],
         scan_type: str = "AXIS_LIST",
+        relative_origin_mm: dict[str, float] | None = None,
         **kwargs: object,
     ) -> "SpatialScanPlan":
         axis = axis.upper()
@@ -216,15 +254,27 @@ class SpatialScanPlan:
         if not values or not all(math.isfinite(float(value)) for value in values):
             raise ValueError("单轴位置列表必须包含有限数值")
         points: list[SpatialPoint] = []
+        if relative_origin_mm is not None:
+            if set(relative_origin_mm) != set(AXES):
+                raise ValueError("相对扫描起始位置必须完整包含 X/Y/Z")
+            origin = {name: float(relative_origin_mm[name]) for name in AXES}
+        else:
+            origin = None
         for index, value in enumerate(values):
             targets = {name: float(fixed_positions_mm.get(name, 0.0)) for name in AXES}
-            targets[axis] = float(value)
+            targets[axis] = (
+                float(value) if origin is None else origin[axis] + float(value)
+            )
             points.append(SpatialPoint(index + 1, index, None, index, targets))
         return cls(
             scan_type=scan_type,
             points=points,
             horizontal_axis=axis,
             horizontal_values=[float(value) for value in values],
+            coordinate_mode=(
+                "RELATIVE_TO_SCAN_START" if origin is not None else "ABSOLUTE"
+            ),
+            origin_positions_mm=origin,
             **kwargs,
         )
 

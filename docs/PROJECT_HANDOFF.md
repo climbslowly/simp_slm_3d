@@ -34,7 +34,7 @@
 
 - 五轴界面分为探测相机 XY 与探测物镜 XYZ。
 - 空间扫描只使用物镜 XYZ；相机 XY 是扫描前固定定位轴。
-- 支持单轴及 XY/XZ/YZ Mock raster、原始 TIFF、CSV、JSON、`scan_data.mat`。
+- 支持单轴及 XY/XZ/YZ raster、逐帧 TIFF/含原图 MAT、CSV、JSON 和汇总 `scan_data.mat`。
 - 支持主图/原图/point_id 联动、历史目录重新打开、ROI 指标、行列剖面。
 - 支持暂停、继续、停止和运行中安全关闭。
 - `gray` 伪彩已改为内置黑白色表，不再查找不存在的 pyqtgraph 文件。
@@ -45,6 +45,8 @@
   `GasFiveAxisStage`；启动读取现有规划位置，不自动 Home。
 - REAL 连接写入 `±260000 pulse` 软限位、调用 `GA_LmtsOn(axis,-1)`，并把单条命令限制为
   `0.1 mm`。GUI 提供不移动的“当前位置采集一张”。
+- GUI 扫描输入使用点击开始时的位置作为相对原点；二维计划为蛇形路径。正常完成后按
+  `0.001 mm` 小步返回开始位置，停止/故障时不自动复位。底部错误支持按钮复制。
 
 人工验收步骤见 `GUI_M1_ACCEPTANCE.md`。
 
@@ -135,7 +137,7 @@ REAL GUI 已接入 `camera_index` 选定的 Basler 相机；曝光由 GUI 写入
 在 GUI-M2 REAL 接入版本上，本机结果为：
 
 ```text
-60 passed
+64 passed
 compileall passed
 git diff --check passed（只有 Windows LF/CRLF 提示）
 ```

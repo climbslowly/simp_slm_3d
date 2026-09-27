@@ -8,9 +8,9 @@ class ScanState(Enum):
     SETTLING = auto()
     ACQUIRING = auto()
     SAVING = auto()
+    RETURNING = auto()
     PAUSED = auto()
     STOPPING = auto()
     STOPPED = auto()
     COMPLETED = auto()
     ERROR = auto()
-

@@ -24,6 +24,22 @@ class GasFiveAxisStage:
         "camera": {"X": 1, "Y": 2},
         "objective": {"X": 3, "Y": 5, "Z": 4},
     }
+    AXIS_METADATA = {
+        "camera": {
+            "X": {"controller_axis": 1, "physical_axis": "Y", "controller_sign_for_gui_positive": 1},
+            "Y": {"controller_axis": 2, "physical_axis": "Z", "controller_sign_for_gui_positive": -1},
+        },
+        "objective": {
+            "X": {"controller_axis": 3, "physical_axis": "Y", "controller_sign_for_gui_positive": 1},
+            "Y": {"controller_axis": 5, "physical_axis": "Z", "controller_sign_for_gui_positive": -1},
+            "Z": {
+                "controller_axis": 4,
+                "physical_axis": "X",
+                "controller_sign_for_gui_positive": 1,
+                "controller_positive_optical_direction": "against_propagation",
+            },
+        },
+    }
 
     def __init__(
         self,
@@ -359,6 +375,9 @@ class GasFiveAxisStage:
             "soft_limits_written_on_connect": self.allow_motion,
             "hard_limits_enabled_on_connect": self.allow_motion,
             "max_single_step_mm": self._max_steps,
-            "axis_mapping": self.AXIS_MAPPING,
+            "axis_mapping_id": "five_axis_operator_observed_v1",
+            "axis_mapping_status": "operator_observed_axis_identity_and_direction",
+            "direction_verification_method": "operator_observed_with_official_controller_software",
+            "axis_mapping": self.AXIS_METADATA,
             "positions_at_query": self.get_all_positions(),
         }

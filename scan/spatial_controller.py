@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import tempfile
 import threading
@@ -46,6 +47,12 @@ class SpatialScanController:
     def request_pause(self) -> None:
         self._pause.set()
 
+    def prepare_run(self) -> None:
+        """在启动工作线程前清除上一轮控制信号，避免启动/停止竞争。"""
+
+        self._stop.clear()
+        self._pause.clear()
+
     def resume(self) -> None:
         self._pause.clear()
         with self._condition:
@@ -87,7 +94,8 @@ class SpatialScanController:
             with tempfile.NamedTemporaryFile(dir=plan.save_root, prefix=".gui_m1_probe_"):
                 pass
             usage = shutil.disk_usage(plan.save_root)
-            estimated = plan.total_points * image_shape[0] * image_shape[1] * 2
+            # 每点同时保存 uint16 TIFF 与包含同一原图的逐帧 MAT。
+            estimated = plan.total_points * image_shape[0] * image_shape[1] * 2 * 2
             if usage.free < estimated + 1_000_000:
                 errors.append("保存目录剩余空间不足以容纳未压缩原始数据估算")
         except OSError as exc:
@@ -113,17 +121,53 @@ class SpatialScanController:
                 self.stage.stop()
             raise
 
+    def _return_to_start(
+        self,
+        start_positions_mm: dict[str, float],
+        *,
+        step_mm: float,
+        timeout_s: float,
+    ) -> None:
+        """用不超过 ``step_mm`` 的线性小步返回扫描开始位置。"""
+
+        current = self.stage.get_positions()
+        max_distance = max(
+            abs(float(start_positions_mm[axis]) - float(current[axis]))
+            for axis in ("X", "Y", "Z")
+        )
+        step_count = math.ceil(max_distance / step_mm)
+        if step_count == 0:
+            return
+        start_of_return = dict(current)
+        self._set_state(ScanState.RETURNING)
+        for index in range(1, step_count + 1):
+            if self._stop.is_set():
+                raise InterruptedError("复位期间收到停止请求")
+            fraction = index / step_count
+            target = {
+                axis: (
+                    float(start_of_return[axis])
+                    + (float(start_positions_mm[axis]) - float(start_of_return[axis]))
+                    * fraction
+                )
+                for axis in ("X", "Y", "Z")
+            }
+            self.stage.move_absolute(target)
+            self._wait_until_idle(timeout_s, operation=f"复位 {index}/{step_count}")
+            if self.callbacks.on_position:
+                self.callbacks.on_position(self.stage.get_positions())
+
     def run(self, plan: SpatialScanPlan) -> Path | None:
         if not self._run_lock.acquire(blocking=False):
             raise RuntimeError("已有扫描或手动移动正在使用设备")
         manager: SpatialDataManager | None = None
         current_point: SpatialPoint | None = None
+        start_positions_mm: dict[str, float] | None = None
         try:
             problems = self.preflight(plan, image_shape=self.camera.image_shape)
             if problems:
                 raise ValueError("Preflight 失败：\n- " + "\n- ".join(problems))
-            self._stop.clear()
-            self._pause.clear()
+            start_positions_mm = self.stage.get_positions()
             self.camera.set_exposure_us(plan.exposure_us)
             scan_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
             manager = SpatialDataManager(plan, scan_id=scan_id)
@@ -167,6 +211,17 @@ class SpatialScanController:
                     self.callbacks.on_point_saved(record, image)
                 if self.callbacks.on_progress:
                     self.callbacks.on_progress(completed, plan.total_points)
+            if (
+                completed == plan.total_points
+                and not self._stop.is_set()
+                and plan.return_to_start
+                and start_positions_mm is not None
+            ):
+                self._return_to_start(
+                    start_positions_mm,
+                    step_mm=plan.return_step_mm,
+                    timeout_s=plan.motion_timeout_s,
+                )
             manager.export_mat()
             self._set_state(ScanState.STOPPED if self._stop.is_set() else ScanState.COMPLETED)
             return session

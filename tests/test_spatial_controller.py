@@ -38,11 +38,13 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     assert controller.state is ScanState.COMPLETED
     assert session_dir is not None
     assert len(list(session_dir.glob("Camera_*/*.tif"))) == 15
+    assert len(list(session_dir.glob("Camera_*/*.mat"))) == 15
     assert (session_dir / "scan_data.mat").is_file()
     with (session_dir / "scan_log.csv").open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
     assert len(rows) == 15 and {row["status"] for row in rows} == {"ok"}
     assert [(int(row["row"]), int(row["col"])) for row in rows] == [(r, c) for r in range(3) for c in range(5)]
+    assert all(row["mat_filename"].endswith("_raw.mat") for row in rows)
     session = SpatialSession.open(session_dir)
     image = session.load_image(8)
     recomputed = roi_metrics(image, (5, 4, 20, 16), "mean")
@@ -75,6 +77,31 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     assert int(matlab["missing_success_image_count"]) == 0
     assert np.all(matlab["image_file_exists"] == 1)
     assert int(matlab["raw_images_embedded"]) == 0
+    assert np.all(matlab["frame_mat_file_exists"] == 1)
+    frame_mat = loadmat(session_dir / rows[0]["mat_filename"], squeeze_me=True)
+    assert np.array_equal(frame_mat["image"], tifffile.imread(session_dir / rows[0]["filename"]))
+
+
+def test_completed_scan_returns_to_start_in_small_steps(tmp_path) -> None:
+    stage, camera = make_devices()
+    stage.move_absolute({"X": 1.0, "Y": -2.0, "Z": 3.0})
+    while stage.is_moving():
+        time.sleep(0.001)
+    start = stage.get_positions()
+    plan = SpatialScanPlan.from_axis_list(
+        axis="X",
+        values=[0.05, 0.1],
+        fixed_positions_mm=start,
+        relative_origin_mm=start,
+        return_to_start=True,
+        return_step_mm=0.01,
+        save_root=tmp_path,
+        settling_time_s=0,
+        roi_xywh=(5, 4, 20, 16),
+    )
+    directory = SpatialScanController(stage, camera).run(plan)
+    assert directory is not None
+    assert stage.get_positions() == pytest.approx(start)
 
 
 def _stop_in_state(tmp_path, wanted: ScanState, *, speed=1000.0, settling=0.0, capture_delay=0.0):

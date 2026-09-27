@@ -24,6 +24,7 @@ pg.setConfigOption("imageAxisOrder", "row-major")
 STATE_TEXT = {
     ScanState.IDLE: "空闲", ScanState.MOVING: "移动", ScanState.WAITING_FOR_POSITION: "等待到位",
     ScanState.SETTLING: "稳定等待", ScanState.ACQUIRING: "采集", ScanState.SAVING: "保存原图与日志",
+    ScanState.RETURNING: "按 0.001 mm 小步返回扫描起点",
     ScanState.PAUSED: "已暂停", ScanState.STOPPING: "停止中", ScanState.STOPPED: "已停止",
     ScanState.COMPLETED: "已完成", ScanState.ERROR: "错误",
 }
@@ -161,7 +162,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_state(ScanState.IDLE)
         self._update_all_positions()
         if config_error:
-            self.error_label.setText(config_error)
+            self._set_error(config_error)
 
     def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
@@ -307,20 +308,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_type.addItems(["XY", "XZ", "YZ", "X range", "Y range", "Z range", "X list", "Y list", "Z list"])
         self.scan_type.setCurrentText(str(self.config["scan_type"]))
         form.addRow("扫描类型", self.scan_type)
-        self.axis1_label = QtWidgets.QLabel("X 起/止/步长")
+        self.axis1_label = QtWidgets.QLabel("X 相对起/止/步长")
         self.axis1 = [spin(float(self.config[key])) for key in ("horizontal_start", "horizontal_stop", "horizontal_step")]
         row1 = QtWidgets.QHBoxLayout(); [row1.addWidget(item) for item in self.axis1]
         form.addRow(self.axis1_label, row1)
-        self.axis2_label = QtWidgets.QLabel("Y 起/止/步长")
+        self.axis2_label = QtWidgets.QLabel("Y 相对起/止/步长")
         self.axis2 = [spin(float(self.config[key])) for key in ("vertical_start", "vertical_stop", "vertical_step")]
         row2 = QtWidgets.QHBoxLayout(); [row2.addWidget(item) for item in self.axis2]
         form.addRow(self.axis2_label, row2)
         self.list_values = QtWidgets.QLineEdit("-0.4,-0.1,0.2,0.45")
         self.list_values.setVisible(False)
-        self.list_label = QtWidgets.QLabel("位置列表 (mm)"); self.list_label.setVisible(False)
+        self.list_label = QtWidgets.QLabel("相对位置列表 (mm)"); self.list_label.setVisible(False)
         form.addRow(self.list_label, self.list_values)
         self.fixed = spin(float(self.config["fixed_value_mm"]))
-        form.addRow("固定轴位置 (mm)", self.fixed)
+        form.addRow("固定轴相对偏移 (mm)", self.fixed)
         bounds = self.config.get("objective_scan_bounds_mm")
         self.boundary_label = QtWidgets.QLabel()
         self.boundary_label.setWordWrap(True)
@@ -419,9 +420,21 @@ class MainWindow(QtWidgets.QMainWindow):
         line = QtWidgets.QHBoxLayout()
         self.state_label = QtWidgets.QLabel("空闲"); self.progress = QtWidgets.QProgressBar(); self.progress.setRange(0, 100)
         self.count_label = QtWidgets.QLabel("0 / 0"); self.directory_label = QtWidgets.QLabel("输出：—")
-        self.error_label = QtWidgets.QLabel(); self.error_label.setStyleSheet("color:#d9534f")
+        self.error_label = QtWidgets.QLabel()
+        self.error_label.setWordWrap(True)
+        self.error_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+            | QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.error_label.setStyleSheet("color:#d9534f")
+        self.copy_error_button = QtWidgets.QPushButton("复制错误")
+        self.copy_error_button.setEnabled(False)
+        self.copy_error_button.clicked.connect(self._copy_error)
         line.addWidget(QtWidgets.QLabel("状态：")); line.addWidget(self.state_label); line.addWidget(self.progress, 1); line.addWidget(self.count_label); line.addWidget(self.directory_label, 2)
-        root.addLayout(line); root.addWidget(self.error_label)
+        error_line = QtWidgets.QHBoxLayout()
+        error_line.addWidget(self.error_label, 1)
+        error_line.addWidget(self.copy_error_button)
+        root.addLayout(line); root.addLayout(error_line)
 
     def _connect_signals(self) -> None:
         self.scan_type.currentTextChanged.connect(self._update_scan_labels)
@@ -452,9 +465,9 @@ class MainWindow(QtWidgets.QMainWindow):
         plane = kind in PLANE_AXES
         is_list = kind.endswith("list")
         if plane:
-            h, v = PLANE_AXES[kind]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[h]} 起/止/步长"); self.axis2_label.setText(f"{OBJECTIVE_AXIS_TEXT[v]} 起/止/步长")
+            h, v = PLANE_AXES[kind]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[h]} 相对起/止/步长"); self.axis2_label.setText(f"{OBJECTIVE_AXIS_TEXT[v]} 相对起/止/步长")
         else:
-            axis = kind[0]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[axis]} 起/止/步长"); self.axis2_label.setText("第二扫描轴（单轴不使用）")
+            axis = kind[0]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[axis]} 相对起/止/步长"); self.axis2_label.setText("第二扫描轴（单轴不使用）")
         for widget in self.axis2: widget.setEnabled(plane)
         for widget in self.axis1: widget.setVisible(not is_list)
         self.axis1_label.setVisible(not is_list)
@@ -462,26 +475,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_estimate()
 
     def _plan_from_controls(self) -> SpatialScanPlan:
+        origin = self.stage.get_positions()
         common = dict(
             save_root=Path(self.output_edit.text()).expanduser(), exposure_us=self.exposure.value() * 1000.0,
             settling_time_s=self.settling.value() / 1000.0, roi_xywh=tuple(item.value() for item in self.roi_spins),
             metric=self.metric_combo.currentText(), experiment_name=f"gui_{self.device_mode.lower()}", camera_serial=self.camera.get_serial_number(),
             objective_bounds_mm=self.config.get("objective_scan_bounds_mm"),
+            return_to_start=True,
+            return_step_mm=0.001,
         )
         kind = self.scan_type.currentText()
         if kind in PLANE_AXES:
             return SpatialScanPlan.from_plane(
                 plane=kind, horizontal_start=self.axis1[0].value(), horizontal_stop=self.axis1[1].value(), horizontal_step=self.axis1[2].value(),
-                vertical_start=self.axis2[0].value(), vertical_stop=self.axis2[1].value(), vertical_step=self.axis2[2].value(), fixed_value_mm=self.fixed.value(), **common,
+                vertical_start=self.axis2[0].value(), vertical_stop=self.axis2[1].value(), vertical_step=self.axis2[2].value(), fixed_value_mm=self.fixed.value(),
+                relative_origin_mm=origin, serpentine=True, **common,
             )
         axis = kind[0]
-        fixed = self.stage.get_positions()
-        fixed[axis] = self.fixed.value()
         if kind.endswith("list"):
             values = [float(value.strip()) for value in self.list_values.text().split(",") if value.strip()]
-            return SpatialScanPlan.from_axis_list(axis=axis, values=values, fixed_positions_mm=fixed, **common)
+            return SpatialScanPlan.from_axis_list(
+                axis=axis, values=values, fixed_positions_mm=origin,
+                relative_origin_mm=origin, **common,
+            )
         return SpatialScanPlan.from_axis_range(
-            axis=axis, start=self.axis1[0].value(), stop=self.axis1[1].value(), step=self.axis1[2].value(), fixed_positions_mm=fixed, **common,
+            axis=axis, start=self.axis1[0].value(), stop=self.axis1[1].value(), step=self.axis1[2].value(), fixed_positions_mm=origin,
+            relative_origin_mm=origin, **common,
         )
 
     def _refresh_estimate(self, *_: object) -> None:
@@ -496,7 +515,7 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 suffix = "；软件边界未配置" if plan.objective_bounds_mm is None else "；已通过软件边界检查"
                 self.plan_summary.setStyleSheet("color:#a85d00" if plan.objective_bounds_mm is None else "")
-                self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（另有 TIFF/JSON/CSV/MAT 开销）{suffix}")
+                self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；坐标相对于当前扫描起点；完成后按 0.001 mm 小步返回；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（TIFF 与逐帧 MAT 各保存一份原图）{suffix}")
                 self.start_button.setEnabled(self._thread is None)
         except Exception as exc:
             self.plan_summary.setStyleSheet("color:#d9534f;font-weight:700")
@@ -539,9 +558,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._on_failed(str(exc)); return
         self._plan = plan; self._session = None; self._records.clear(); self._images.clear(); self._last_session_dir = None
         self._metric_data = np.full(plan.grid_shape if plan.grid_shape else (plan.total_points,), np.nan, dtype=float)
-        self.error_label.clear(); self.progress.setValue(0); self.count_label.setText(f"0 / {plan.total_points}")
+        self._set_error(""); self.progress.setValue(0); self.count_label.setText(f"0 / {plan.total_points}")
         self.point_slider.setRange(1, plan.total_points); self.point_spin.setRange(1, plan.total_points)
         self._render_main(); self._lock_controls(True)
+        self.controller.prepare_run()
         thread = QtCore.QThread(self); worker = ScanWorker(self.controller, plan, self.bridge); worker.moveToThread(thread)
         thread.started.connect(worker.run); self.bridge.finished.connect(thread.quit); self.bridge.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater); thread.finished.connect(self._thread_done); self._thread = thread; self._worker = worker; thread.start()
@@ -612,14 +632,24 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(object)
     def _on_finished(self, directory: Path | None) -> None:
         if directory:
-            self._last_session_dir = Path(directory); self.directory_label.setText(f"输出：{directory}")
+            self._last_session_dir = Path(directory)
+            self.directory_label.setText(
+                f"输出：{directory}；汇总 MAT：scan_data.mat"
+            )
             try: self._session = SpatialSession.open(Path(directory))
-            except Exception as exc: self.error_label.setText(f"扫描已结束，但回读检查失败：{exc}")
+            except Exception as exc: self._set_error(f"扫描已结束，但回读检查失败：{exc}")
         self.scan_finished.emit(directory)
 
     @QtCore.Slot(str)
     def _on_failed(self, message: str) -> None:
-        self.error_label.setText(message); self._set_state(ScanState.ERROR)
+        self._set_error(message); self._set_state(ScanState.ERROR)
+
+    def _set_error(self, message: str) -> None:
+        self.error_label.setText(message)
+        self.copy_error_button.setEnabled(bool(message))
+
+    def _copy_error(self) -> None:
+        QtWidgets.QApplication.clipboard().setText(self.error_label.text())
 
     def _render_main(self) -> None:
         if self._plan is None or self._metric_data is None: return
@@ -653,12 +683,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 import tifffile
                 image = tifffile.imread(Path(str(record["_session_dir"])) / str(record["filename"]))
             except Exception as exc:
-                self.error_label.setText(f"读取运行中已保存原图失败：{exc}")
+                self._set_error(f"读取运行中已保存原图失败：{exc}")
         if self._session is not None and (record is None or image is None):
             record = next((r for r in self._session.successful_records if int(r["point_id"]) == point_id), record)
             if record is not None and image is None:
                 try: image = self._session.load_image(point_id)
-                except Exception as exc: self.error_label.setText(str(exc)); return
+                except Exception as exc: self._set_error(str(exc)); return
         if record is None or image is None:
             self.image_info.setText(f"point_id={point_id} 未采集或采集失败"); return
         self._selected_point_id = point_id; self.raw_item.setImage(image, autoLevels=True)
@@ -688,7 +718,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     [(0, 0, 0, 255), (255, 255, 255, 255)],
                     name="gray-fallback",
                 )
-                self.error_label.setText(f"伪彩 {name!r} 不可用，已回退 gray：{exc}")
+                self._set_error(f"伪彩 {name!r} 不可用，已回退 gray：{exc}")
         self.raw_item.setColorMap(color_map)
 
     def _update_selection_graphics(self, record: dict[str, object]) -> None:
@@ -792,11 +822,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._thread is not None:
             self.controller.request_stop()
             if not self._thread.wait(6000):
-                self.error_label.setText("扫描线程未能在 6 秒内安全退出，窗口保持打开")
+                self._set_error("扫描线程未能在 6 秒内安全退出，窗口保持打开")
                 event.ignore(); return
         if self._move_thread is not None:
             self.controller.request_stop()
             if not self._move_thread.wait(6000): event.ignore(); return
         try: save_config_atomic(self.config_path, self._config_from_controls())
-        except Exception as exc: self.error_label.setText(f"保存配置失败：{exc}")
+        except Exception as exc: self._set_error(f"保存配置失败：{exc}")
         self.camera.disconnect(); self.stage.disconnect(); event.accept()
