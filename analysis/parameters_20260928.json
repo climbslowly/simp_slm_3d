@@ -1,0 +1,13 @@
+{
+  "algorithm_version": 1,
+  "signal_roi_xywh": [2400, 1200, 3000, 3200],
+  "background_roi_xywh": [0, 0, 1024, 1024],
+  "threshold_sigma": 5.0,
+  "candidate_clip_count": 4095,
+  "radial_bin_px": 10,
+  "radial_max_px": 1400,
+  "display_counts": [60, 600],
+  "preview_stride": 4,
+  "comparison_atol": 1e-8,
+  "comparison_rtol": 1e-10
+}

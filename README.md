@@ -1,5 +1,8 @@
 # Dimension Camera
 
+离线处理已有单轴扫描（Python + MATLAB、中文学习说明、位置—照片浏览和结果核对）：
+见 [OFFLINE_ANALYSIS.md](docs/OFFLINE_ANALYSIS.md)。此入口不连接硬件。
+
 维度/GAS 位移台与 Basler pylon 相机的自动扫描项目。当前版本是 **Stage Bring-up V0.4 + GUI-M2**：
 硬件 Adapter、Mock 设备、ScanPlan、扫描状态机、TIFF/JSON/CSV/MAT 保存和自动测试已经建立；
 本轮增加了单位隔离、能力/标定模型、真实运动 safety gate、dry-run 和只读接入 SOP。

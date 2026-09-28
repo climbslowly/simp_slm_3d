@@ -2,6 +2,17 @@
 
 更新时间：2026-09-28。本文为下一次数据处理对话提供背景，具体实现以实际样例数据为准。
 
+## 当前离线实现（2026-09-28 补充）
+
+已接收并处理 `output/gui_m1/20260928_135701_746_gui_real` 的五点 Z 扫描。
+Python 入口 `python -m analysis.offline_scan`，MATLAB 入口 `analysis/analyze_scan.m`；
+共用参数、位置—照片总览、滑条浏览器、背景/强度/质心/宽度/梯度及径向剖面已完成。
+两种语言已在本机实际运行，并通过 `analysis.compare_results` 数值核对。
+中文学习说明、算法单位、相机官方资料和完整命令见 [OFFLINE_ANALYSIS.md](OFFLINE_ANALYSIS.md)。
+原始数据、图表及本次具体发现留在被忽略的 `output/offline_20260928/`，不提交。
+下文第2节的“尚未收到数据”为开始此阶段时的历史状态。
+本轮仅支持离线单轴数据；二维硬件测试仍暂缓。
+
 ## 1. 项目现状
 
 - 工作区：`C:\slm_3d\dimension_camera`；仓库：`https://github.com/climbslowly/simp_slm_3d.git`。
