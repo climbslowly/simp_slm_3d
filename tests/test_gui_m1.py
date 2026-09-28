@@ -230,3 +230,23 @@ def test_gui_mock_camera_move_does_not_change_objective(tmp_path: Path) -> None:
         assert window.stage.get_positions() == original
     finally:
         window.close(); app.processEvents()
+
+
+def test_move_to_target_button_dispatches_objective_targets(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(config_path=tmp_path / "configuration.json")
+    try:
+        targets = {"X": 0.01, "Y": -0.02, "Z": 0.03}
+        for axis, value in targets.items():
+            window.target_spins[axis].setValue(value)
+
+        dispatched: list[tuple[dict[str, float], str]] = []
+
+        def capture_move(values: dict[str, float], *, group: str) -> None:
+            dispatched.append((values, group))
+
+        window._start_move = capture_move  # type: ignore[method-assign]
+        window.move_button.click()
+        assert dispatched == [(targets, "objective")]
+    finally:
+        window.close(); app.processEvents()

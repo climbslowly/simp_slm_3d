@@ -250,7 +250,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.target_spins[axis] = target
             grid.addWidget(target, 5, column + 1)
         grid.addWidget(QtWidgets.QLabel("绝对目标"), 5, 0)
-        self.move_button = QtWidgets.QPushButton("移动到目标")
+        self.move_button = QtWidgets.QPushButton(
+            "移动到绝对目标（会运动）"
+            if self.device_mode == "REAL"
+            else "移动到目标"
+        )
         self.move_button.clicked.connect(self._move_to_targets)
         grid.addWidget(self.move_button, 6, 1, 1, 3)
         note = QtWidgets.QLabel(
@@ -296,7 +300,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.camera_target_spins[axis] = target
             camera_grid.addWidget(target, 5, column + 1)
         camera_grid.addWidget(QtWidgets.QLabel("绝对目标"), 5, 0)
-        self.camera_move_button = QtWidgets.QPushButton("相机移动到目标")
+        self.camera_move_button = QtWidgets.QPushButton(
+            "相机移动到绝对目标（会运动）"
+            if self.device_mode == "REAL"
+            else "相机移动到目标"
+        )
         self.camera_move_button.clicked.connect(self._move_camera_to_targets)
         camera_grid.addWidget(self.camera_move_button, 6, 1, 1, 2)
         camera_note = QtWidgets.QLabel(
@@ -381,7 +389,7 @@ class MainWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("运行与回读")
         grid = QtWidgets.QGridLayout(box)
         self.start_button = QtWidgets.QPushButton(f"开始 {self.device_mode} 扫描")
-        self.capture_current_button = QtWidgets.QPushButton("当前位置采集一张")
+        self.capture_current_button = QtWidgets.QPushButton("当前位置采集一张（不移动）")
         self.pause_button = QtWidgets.QPushButton("暂停")
         self.resume_button = QtWidgets.QPushButton("继续")
         self.stop_button = QtWidgets.QPushButton("停止")

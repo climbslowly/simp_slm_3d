@@ -141,7 +141,7 @@ REAL GUI 已接入 `camera_index` 选定的 Basler 相机；曝光由 GUI 写入
 在 GUI-M2 REAL 接入版本上，本机结果为：
 
 ```text
-71 passed
+72 passed
 compileall passed
 git diff --check passed（只有 Windows LF/CRLF 提示）
 ```
