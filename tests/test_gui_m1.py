@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import warnings
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -159,6 +160,14 @@ def test_gui_builds_relative_serpentine_plan_and_copies_errors(tmp_path: Path) -
         )
         assert plan.return_to_start and plan.return_step_mm == 0.001
         assert not window.controller.preflight(plan, image_shape=camera.image_shape)
+        window._plan = plan
+        assert window._absolute_axis_values("X", plan.horizontal_values) == pytest.approx(
+            [point.targets_mm["X"] for point in plan.points[:5]]
+        )
+        assert window._absolute_axis_values("Y", plan.vertical_values) == pytest.approx(
+            [-3.3516, -3.3016, -3.2516, -3.2016, -3.1516]
+        )
+        assert window._absolute_fixed_value() == pytest.approx(1.6478)
 
         window.plane_scan_path.setCurrentText("Z形（每行同向）")
         z_shaped = window._plan_from_controls()
@@ -198,17 +207,34 @@ def test_gui_z_range_is_relative_and_keeps_xy_fixed(tmp_path: Path) -> None:
         )
         assert {point.targets_mm["X"] for point in plan.points} == {3.6806}
         assert {point.targets_mm["Y"] for point in plan.points} == {-3.2516}
+
+        window._plan = plan
+        window._metric_data = np.full(plan.total_points, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            window._render_main()
+        assert window.curve.xData is None or window.curve.xData.size == 0
+
+        window._metric_data[1] = 42.0
+        window._render_main()
+        assert window.curve.xData == pytest.approx([plan.points[1].targets_mm["Z"]])
+        assert window.main_plot.getAxis("bottom").labelText == "Z 绝对位置 (mm)"
     finally:
         window.close(); app.processEvents()
 
 
 def test_gui_reopens_saved_raw_image(tmp_path: Path) -> None:
     stage = MockXYZStage(speed_mm_s=1000); stage.connect()
+    stage.move_absolute({"X": 1.25, "Y": -2.5, "Z": 0.75})
+    while stage.is_moving():
+        time.sleep(0.001)
+    origin = stage.get_positions()
     camera = MockCamera(shape=(32, 40), position_provider=stage.get_positions); camera.connect()
     plan = SpatialScanPlan.from_plane(
         plane="XY", horizontal_start=0, horizontal_stop=0, horizontal_step=1,
         vertical_start=0, vertical_stop=0, vertical_step=1, fixed_value_mm=0,
-        save_root=tmp_path / "data", roi_xywh=(1, 1, 10, 10), settling_time_s=0,
+        relative_origin_mm=origin, save_root=tmp_path / "data",
+        roi_xywh=(1, 1, 10, 10), settling_time_s=0,
     )
     directory = SpatialScanController(stage, camera).run(plan)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -217,6 +243,10 @@ def test_gui_reopens_saved_raw_image(tmp_path: Path) -> None:
         window.open_session(directory)
         assert window.raw_item.image is not None
         assert window._selected_point_id == 1
+        assert window._plan.coordinate_mode == "RELATIVE_TO_SCAN_START"
+        assert window._absolute_axis_values("X", window._plan.horizontal_values) == pytest.approx([1.25])
+        assert window._absolute_axis_values("Y", window._plan.vertical_values) == pytest.approx([-2.5])
+        assert window._absolute_fixed_value() == pytest.approx(0.75)
     finally:
         window.close(); app.processEvents()
 

@@ -718,15 +718,51 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.heat_item.setImage(self._metric_data, autoLevels=False, levels=(low, high))
             else:
                 self.heat_item.clear()
-            h, v = self._plan.horizontal_values, self._plan.vertical_values
+            h = self._absolute_axis_values(
+                self._plan.horizontal_axis, self._plan.horizontal_values
+            )
+            v = self._absolute_axis_values(
+                self._plan.vertical_axis, self._plan.vertical_values
+            )
             dx = h[1] - h[0] if len(h) > 1 else 1.0; dy = v[1] - v[0] if len(v) > 1 else 1.0
             transform = QtGui.QTransform(); transform.translate(h[0] - dx / 2, v[0] - dy / 2); transform.scale(dx, dy); self.heat_item.setTransform(transform)
-            self.main_plot.setLabel("bottom", f"{self._plan.horizontal_axis} (mm)"); self.main_plot.setLabel("left", f"{self._plan.vertical_axis} (mm)")
-            self.main_plot.setTitle(f"{self._plan.scan_type} 热图 · NaN=未采集 · 固定 {self._plan.fixed_axis}={self._plan.fixed_value_mm:g} mm")
+            self.main_plot.setLabel("bottom", f"{self._plan.horizontal_axis} 绝对位置 (mm)"); self.main_plot.setLabel("left", f"{self._plan.vertical_axis} 绝对位置 (mm)")
+            fixed_value = self._absolute_fixed_value()
+            self.main_plot.setTitle(f"{self._plan.scan_type} 热图 · NaN=未采集 · 固定 {self._plan.fixed_axis}={fixed_value:g} mm（绝对）")
         else:
-            self.heat_item.hide(); self.histogram.hide(); self.curve.setData(self._plan.horizontal_values, self._metric_data)
-            self.main_plot.setLabel("bottom", f"{self._plan.horizontal_axis} (mm)"); self.main_plot.setLabel("left", self._plan.metric)
-            self.main_plot.setTitle(f"{self._plan.scan_type} 单轴曲线 · NaN=未采集")
+            self.heat_item.hide(); self.histogram.hide()
+            x_values = self._absolute_axis_values(
+                self._plan.horizontal_axis, self._plan.horizontal_values
+            )
+            finite = np.isfinite(self._metric_data)
+            self.curve.setData(x_values[finite], self._metric_data[finite])
+            self.main_plot.setLabel("bottom", f"{self._plan.horizontal_axis} 绝对位置 (mm)"); self.main_plot.setLabel("left", self._plan.metric)
+            self.main_plot.setTitle(f"{self._plan.scan_type} 单轴曲线 · 仅显示已采集点 · 横轴为绝对位置")
+
+    def _absolute_axis_values(
+        self, axis: str | None, values: list[float]
+    ) -> np.ndarray:
+        result = np.asarray(values, dtype=float)
+        if (
+            self._plan is not None
+            and axis is not None
+            and self._plan.coordinate_mode == "RELATIVE_TO_SCAN_START"
+            and self._plan.origin_positions_mm is not None
+        ):
+            result = result + float(self._plan.origin_positions_mm[axis])
+        return result
+
+    def _absolute_fixed_value(self) -> float:
+        if self._plan is None or self._plan.fixed_value_mm is None:
+            return 0.0
+        value = float(self._plan.fixed_value_mm)
+        if (
+            self._plan.fixed_axis is not None
+            and self._plan.coordinate_mode == "RELATIVE_TO_SCAN_START"
+            and self._plan.origin_positions_mm is not None
+        ):
+            value += float(self._plan.origin_positions_mm[self._plan.fixed_axis])
+        return value
 
     def _select_point(self, point_id: int) -> None:
         if point_id < 1: return
@@ -802,19 +838,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._plan and self._plan.is_plane:
             y = float(record[f"target_{self._plan.vertical_axis.lower()}_mm"]); self.cross_x.setValue(x); self.cross_y.setValue(y)
             row, col = int(record["row"]), int(record["col"])
-            self.profile_row.setData(self._plan.horizontal_values, self._metric_data[row, :]); self.profile_col.setData(self._plan.vertical_values, self._metric_data[:, col])
+            horizontal = self._absolute_axis_values(self._plan.horizontal_axis, self._plan.horizontal_values)
+            vertical = self._absolute_axis_values(self._plan.vertical_axis, self._plan.vertical_values)
+            self.profile_row.setData(horizontal, self._metric_data[row, :]); self.profile_col.setData(vertical, self._metric_data[:, col])
         else:
             self.cross_x.setValue(x); self.profile_row.setData([], []); self.profile_col.setData([], [])
 
     def _main_clicked(self, event: object) -> None:
         if self._plan is None or not self._records: return
         position = self.main_plot.plotItem.vb.mapSceneToView(event.scenePos())
+        horizontal = self._absolute_axis_values(self._plan.horizontal_axis, self._plan.horizontal_values)
         if self._plan.is_plane:
-            col = int(np.argmin(np.abs(np.asarray(self._plan.horizontal_values) - position.x())))
-            row = int(np.argmin(np.abs(np.asarray(self._plan.vertical_values) - position.y())))
-            point_id = row * len(self._plan.horizontal_values) + col + 1
+            vertical = self._absolute_axis_values(self._plan.vertical_axis, self._plan.vertical_values)
+            col = int(np.argmin(np.abs(horizontal - position.x())))
+            row = int(np.argmin(np.abs(vertical - position.y())))
+            point = next(
+                item
+                for item in self._plan.points
+                if item.row == row and item.col == col
+            )
+            point_id = point.point_id
         else:
-            point_id = int(np.argmin(np.abs(np.asarray(self._plan.horizontal_values) - position.x()))) + 1
+            point_id = int(np.argmin(np.abs(horizontal - position.x()))) + 1
         self.view_mode.setCurrentText("固定选择"); self._select_point(point_id)
 
     def open_session(self, directory: Path) -> None:
@@ -828,6 +873,8 @@ class MainWindow(QtWidgets.QMainWindow):
             experiment_name=str(cfg["experiment_name"]), camera_serial=str(cfg["camera_serial"]), horizontal_axis=cfg.get("horizontal_axis"),
             vertical_axis=cfg.get("vertical_axis"), horizontal_values=list(cfg.get("horizontal_values", [])), vertical_values=list(cfg.get("vertical_values", [])),
             fixed_axis=cfg.get("fixed_axis"), fixed_value_mm=cfg.get("fixed_value_mm"),
+            plane_path_mode=cfg.get("plane_path_mode"), coordinate_mode=str(cfg.get("coordinate_mode", "ABSOLUTE")),
+            origin_positions_mm=cfg.get("origin_positions_mm"),
         )
         self._metric_data = np.full(self._plan.grid_shape if self._plan.grid_shape else (self._plan.total_points,), np.nan)
         for record in session.successful_records:
