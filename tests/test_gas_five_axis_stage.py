@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import ctypes
+import math
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -132,12 +134,22 @@ def test_real_stage_uses_axis_mask_and_enforces_single_step(tmp_path: Path) -> N
     target["X"] += 0.01
     stage.move_absolute(target)
     assert fake.GA_Update.arguments[-1] == (4,)
+    assert stage.is_moving() is True
+    stage._active_not_before_monotonic = time.monotonic() - 1.0
     assert stage.is_moving() is False
 
     too_far = stage.get_positions()
     too_far["Z"] += 0.1001
     with pytest.raises(StageSafetyError, match="单步"):
         stage.move_absolute(too_far)
+
+
+def test_minimum_motion_time_uses_trapezoid_profile_and_margin(tmp_path: Path) -> None:
+    stage, _fake = connected_stage(tmp_path)
+    assert stage._minimum_motion_time_s(10) == pytest.approx(
+        2 * math.sqrt(10 / 0.5) / 1000 + 0.02
+    )
+    assert stage._minimum_motion_time_s(500) > 0.19
 
 
 def test_triggered_limit_blocks_toward_limit_but_allows_retreat(tmp_path: Path) -> None:

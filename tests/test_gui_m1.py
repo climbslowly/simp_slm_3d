@@ -38,6 +38,13 @@ def test_gui_constructs_mock_only_without_hardware(tmp_path: Path) -> None:
         window._records[1] = {"point_id": 1}
         # 主图浏览逻辑本身不能提交运动。
         assert window.stage.move_command_count == before
+        window.stage.move_absolute({"X": 0.125, "Y": -0.25, "Z": 0.375})
+        while window.stage.is_moving():
+            time.sleep(0.001)
+        QtTest.QTest.qWait(300)
+        assert window.position_labels["X"].text() == "0.1250 mm"
+        assert window.position_labels["Y"].text() == "-0.2500 mm"
+        assert window.position_labels["Z"].text() == "0.3750 mm"
     finally:
         window.close(); app.processEvents()
 

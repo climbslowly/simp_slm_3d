@@ -153,8 +153,13 @@ class SpatialScanController:
 
     def _wait_until_idle(self, timeout_s: float, *, operation: str) -> None:
         deadline = time.monotonic() + timeout_s
+        next_position_update = 0.0
         try:
             while self.stage.is_moving():
+                now = time.monotonic()
+                if self.callbacks.on_position and now >= next_position_update:
+                    self.callbacks.on_position(self.stage.get_positions())
+                    next_position_update = now + 0.1
                 if self._stop.wait(0.02):
                     self.stage.stop()
                     raise InterruptedError(f"{operation}等待期间停止")
@@ -201,6 +206,18 @@ class SpatialScanController:
             self._wait_until_idle(timeout_s, operation=f"复位 {index}/{step_count}")
             if self.callbacks.on_position:
                 self.callbacks.on_position(self.stage.get_positions())
+        final_positions = self.stage.get_positions()
+        tolerance_mm = max(0.0001, step_mm / 10.0)
+        errors = [
+            f"{axis}: 目标 {float(start_positions_mm[axis]):.6f} mm，"
+            f"读回 {float(final_positions[axis]):.6f} mm"
+            for axis in ("X", "Y", "Z")
+            if abs(
+                float(final_positions[axis]) - float(start_positions_mm[axis])
+            ) > tolerance_mm
+        ]
+        if errors:
+            raise RuntimeError("扫描后返回起点校验失败：" + "；".join(errors))
 
     def run(self, plan: SpatialScanPlan) -> Path | None:
         if not self._run_lock.acquire(blocking=False):

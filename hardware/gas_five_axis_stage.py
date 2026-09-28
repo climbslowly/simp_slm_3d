@@ -48,15 +48,22 @@ class GasFiveAxisStage:
         allow_motion: bool,
         velocity_pulse_per_ms: float = 3.0,
         acceleration_pulse_per_ms2: float = 0.5,
+        motion_completion_margin_s: float = 0.02,
     ) -> None:
         self.profile = profile
         self.allow_motion = bool(allow_motion)
         self.velocity = float(velocity_pulse_per_ms)
         self.acceleration = float(acceleration_pulse_per_ms2)
+        self.motion_completion_margin_s = float(motion_completion_margin_s)
         if not math.isfinite(self.velocity) or self.velocity <= 0:
             raise ValueError("velocity_pulse_per_ms 必须是有限正数")
         if not math.isfinite(self.acceleration) or self.acceleration <= 0:
             raise ValueError("acceleration_pulse_per_ms2 必须是有限正数")
+        if (
+            not math.isfinite(self.motion_completion_margin_s)
+            or self.motion_completion_margin_s < 0
+        ):
+            raise ValueError("motion_completion_margin_s 必须是有限非负数")
         required_axes = {1, 2, 3, 4, 5}
         if not required_axes.issubset(profile.axes):
             missing = sorted(required_axes - set(profile.axes))
@@ -77,6 +84,7 @@ class GasFiveAxisStage:
         self._dll: ctypes.CDLL | None = None
         self._connected = False
         self._active_targets_pulse: dict[int, int] = {}
+        self._active_not_before_monotonic = 0.0
         self._lock = threading.RLock()
 
     @property
@@ -145,6 +153,7 @@ class GasFiveAxisStage:
             self._check(self._dll.GA_Close(), "GA_Close")
         finally:
             self._active_targets_pulse.clear()
+            self._active_not_before_monotonic = 0.0
             self._connected = False
             self._dll = None
         if stop_error is not None:
@@ -221,6 +230,21 @@ class GasFiveAxisStage:
             errors.append("负向限位已触发，拒绝继续负向运动")
         return errors
 
+    def _minimum_motion_time_s(self, distance_pulse: float) -> float:
+        """按当前梯形参数估算命令的最短完成时间，并加入通信余量。"""
+
+        distance = abs(float(distance_pulse))
+        if distance == 0:
+            return 0.0
+        acceleration_distance = self.velocity**2 / self.acceleration
+        if distance <= acceleration_distance:
+            duration_ms = 2.0 * math.sqrt(distance / self.acceleration)
+        else:
+            acceleration_ms = self.velocity / self.acceleration
+            cruise_ms = (distance - acceleration_distance) / self.velocity
+            duration_ms = 2.0 * acceleration_ms + cruise_ms
+        return duration_ms / 1000.0 + self.motion_completion_margin_s
+
     def _move_group_absolute(self, group: str, targets_mm: dict[str, float]) -> None:
         if not self.allow_motion:
             raise StageSafetyError("真实 GUI 运动未显式启用")
@@ -233,7 +257,7 @@ class GasFiveAxisStage:
             if self.is_moving():
                 raise StageSafetyError("位移台正在运动，拒绝堆积新命令")
             dll = self._require_connected()
-            prepared: list[tuple[int, int]] = []
+            prepared: list[tuple[int, int, float]] = []
             errors: list[str] = []
             for logical_axis, axis_id in mapping.items():
                 target_mm = float(targets_mm[logical_axis])
@@ -244,14 +268,15 @@ class GasFiveAxisStage:
                     for reason in self._target_errors(axis_id, target_mm, current_mm, raw_status)
                 )
                 target_pulse = self._calibrations[axis_id].mm_to_pulse(target_mm)
-                if abs(target_pulse - self._read_position_pulse(axis_id)) >= 1.0:
-                    prepared.append((axis_id, target_pulse))
+                current_pulse = self._read_position_pulse(axis_id)
+                if abs(target_pulse - current_pulse) >= 1.0:
+                    prepared.append((axis_id, target_pulse, current_pulse))
             if errors:
                 raise StageSafetyError("真实运动被安全门拒绝：\n- " + "\n- ".join(errors))
             if not prepared:
                 return
             mask = 0
-            for axis_id, target_pulse in prepared:
+            for axis_id, target_pulse, _current_pulse in prepared:
                 self._check(dll.GA_AxisOn(axis_id), "GA_AxisOn")
                 self._check(dll.GA_PrfTrap(axis_id), "GA_PrfTrap")
                 self._check(
@@ -263,11 +288,22 @@ class GasFiveAxisStage:
                 self._check(dll.GA_SetPos(axis_id, target_pulse), "GA_SetPos")
                 self._check(dll.GA_SetVel(axis_id, self.velocity), "GA_SetVel")
                 mask |= 1 << (axis_id - 1)
-            self._active_targets_pulse = dict(prepared)
+            self._active_targets_pulse = {
+                axis_id: target_pulse
+                for axis_id, target_pulse, _current_pulse in prepared
+            }
             try:
                 self._check(dll.GA_Update(mask), "GA_Update")
+                minimum_duration = max(
+                    self._minimum_motion_time_s(target_pulse - current_pulse)
+                    for _axis_id, target_pulse, current_pulse in prepared
+                )
+                self._active_not_before_monotonic = (
+                    time.monotonic() + minimum_duration
+                )
             except Exception:
                 self._active_targets_pulse.clear()
+                self._active_not_before_monotonic = 0.0
                 raise
 
     def move_absolute(self, targets_mm: dict[str, float]) -> None:
@@ -310,8 +346,11 @@ class GasFiveAxisStage:
                 raise StageSafetyError(f"轴 {axis_id} 运动状态异常：{decoded}")
             running = running or bool(decoded["running"])
             arrived = arrived and abs(current_pulse - target_pulse) < 1.0
+        if time.monotonic() < self._active_not_before_monotonic:
+            return True
         if not running and arrived:
             self._active_targets_pulse.clear()
+            self._active_not_before_monotonic = 0.0
             return False
         return True
 
@@ -333,6 +372,7 @@ class GasFiveAxisStage:
             else:
                 raise StageSafetyError("GA_Stop 后 2 秒内运动状态未清除")
         self._active_targets_pulse.clear()
+        self._active_not_before_monotonic = 0.0
 
     @property
     def objective_bounds_mm(self) -> dict[str, list[float]]:
@@ -401,6 +441,8 @@ class GasFiveAxisStage:
             "soft_limits_written_on_connect": self.allow_motion,
             "hard_limits_enabled_on_connect": self.allow_motion,
             "max_single_step_mm": self._max_steps,
+            "motion_completion_model": "trapezoid minimum time plus configured margin",
+            "motion_completion_margin_s": self.motion_completion_margin_s,
             "axis_mapping_id": "five_axis_operator_observed_v1",
             "axis_mapping_status": "operator_observed_axis_identity_and_direction",
             "direction_verification_method": "operator_observed_with_official_controller_software",

@@ -165,6 +165,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_scan_labels()
         self._set_state(ScanState.IDLE)
         self._update_all_positions()
+        self._position_timer = QtCore.QTimer(self)
+        self._position_timer.setInterval(250)
+        self._position_timer.timeout.connect(self._poll_current_positions)
+        self._position_timer.start()
         if config_error:
             self._set_error(config_error)
 
@@ -227,7 +231,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.position_labels[axis] = label
             grid.addWidget(label, 1, column + 1)
-        grid.addWidget(QtWidgets.QLabel("当前位置*"), 1, 0)
+        grid.addWidget(QtWidgets.QLabel("实时规划位置*"), 1, 0)
         self.manual_step = spin(float(self.config["manual_step_mm"]), minimum=0.0001, maximum=100, decimals=4)
         self.manual_step.setSuffix(" mm")
         grid.addWidget(QtWidgets.QLabel("步长"), 2, 0)
@@ -271,7 +275,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.camera_position_labels[axis] = label
             camera_grid.addWidget(label, 1, column + 1)
-        camera_grid.addWidget(QtWidgets.QLabel("当前位置*"), 1, 0)
+        camera_grid.addWidget(QtWidgets.QLabel("实时规划位置*"), 1, 0)
         self.camera_manual_step = spin(
             float(self.config["camera_manual_step_mm"]), minimum=0.0001, maximum=100, decimals=4
         )
@@ -591,7 +595,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _thread_done(self) -> None:
         if self._thread: self._thread.deleteLater()
-        self._thread = None; self._lock_controls(False); self._refresh_estimate()
+        self._thread = None
+        self._lock_controls(False)
+        self._poll_current_positions()
+        self._refresh_estimate()
 
     def _lock_controls(self, locked: bool) -> None:
         for item in self.scan_inputs: item.setEnabled(not locked)
@@ -637,6 +644,20 @@ class MainWindow(QtWidgets.QMainWindow):
         for axis, value in camera.items():
             if axis in self.camera_target_spins:
                 self.camera_target_spins[axis].setValue(value)
+
+    def _poll_current_positions(self) -> None:
+        """空闲时每 250 ms 刷新规划位置；运动期间由工作线程发送更新。"""
+
+        if self._thread is not None or self._move_thread is not None:
+            return
+        if not self.stage.is_connected:
+            return
+        try:
+            self._update_position(self.stage.get_positions())
+            self._update_camera_position(self.stage.get_camera_positions())
+        except Exception as exc:
+            self._position_timer.stop()
+            self._set_error(f"实时位置刷新失败：{exc}")
 
     @QtCore.Slot(object, object)
     def _on_point_saved(self, record: dict[str, object], image: np.ndarray) -> None:
@@ -829,6 +850,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.move_button.setEnabled(True)
         for button in self.camera_jog_buttons: button.setEnabled(True)
         self.camera_move_button.setEnabled(True)
+        self._poll_current_positions()
 
     def _config_from_controls(self) -> dict[str, object]:
         return {
@@ -851,6 +873,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._move_thread is not None:
             self.controller.request_stop()
             if not self._move_thread.wait(6000): event.ignore(); return
+        self._position_timer.stop()
         try: save_config_atomic(self.config_path, self._config_from_controls())
         except Exception as exc: self._set_error(f"保存配置失败：{exc}")
         self.camera.disconnect(); self.stage.disconnect(); event.accept()
