@@ -1,0 +1,29 @@
+{
+  "algorithm_version": 1,
+  "signal_roi_xywh": [2400, 1200, 3000, 3200],
+  "background_roi_xywh": [0, 0, 1024, 1024],
+  "threshold_sigma": 5.0,
+  "candidate_clip_count": 255,
+  "radial_bin_px": 10,
+  "radial_max_px": 1400,
+  "display_counts": [0, 80],
+  "preview_stride": 16,
+  "comparison_atol": 1e-8,
+  "comparison_rtol": 1e-10,
+  "nominal_um_per_pixel": 0.16426666666666667,
+  "wavelength_um": 1.061,
+  "objective_na": 0.57,
+  "focus_half_window_um": 10,
+  "core_radius_px": 3,
+  "spots": {
+    "gaussian_sigma_px": 1.2,
+    "gaussian_radius_px": 4,
+    "maximum_filter_halfwidth_px": 10,
+    "peak_threshold_counts": 10,
+    "sensitivity_thresholds_counts": [6, 8, 10, 12, 14, 16, 20],
+    "aperture_radius_px": 11,
+    "background_annulus_inner_px": 12,
+    "background_annulus_outer_px": 14,
+    "moment_threshold_sigma": 3
+  }
+}
