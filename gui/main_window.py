@@ -483,6 +483,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.bridge.failed.connect(self._on_failed)
         self.point_slider.valueChanged.connect(self._user_select_point)
         self.point_spin.valueChanged.connect(self._user_select_point)
+        self.view_mode.currentTextChanged.connect(self._view_mode_changed)
         self.raw_colormap.currentTextChanged.connect(self._set_raw_colormap)
         self.main_plot.scene().sigMouseClicked.connect(self._main_clicked)
         self._set_raw_colormap(self.raw_colormap.currentText())
@@ -592,9 +593,12 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self._on_failed(str(exc)); return
         self._plan = plan; self._session = None; self._records.clear(); self._images.clear(); self._last_session_dir = None
+        self._selected_point_id = None
         self._metric_data = np.full(plan.grid_shape if plan.grid_shape else (plan.total_points,), np.nan, dtype=float)
         self._set_error(""); self.progress.setValue(0); self.count_label.setText(f"0 / {plan.total_points}")
-        self.point_slider.setRange(1, plan.total_points); self.point_spin.setRange(1, plan.total_points)
+        self._reset_point_browser(plan.total_points)
+        self.raw_item.clear()
+        self.image_info.setText("等待当前扫描首帧")
         self._render_main(); self._lock_controls(True)
         self.controller.prepare_run()
         thread = QtCore.QThread(self); worker = ScanWorker(self.controller, plan, self.bridge); worker.moveToThread(thread)
@@ -753,6 +757,26 @@ class MainWindow(QtWidgets.QMainWindow):
     def _user_select_point(self, point_id: int) -> None:
         self.view_mode.setCurrentText("固定选择")
         self._select_point(point_id)
+
+    def _reset_point_browser(self, total_points: int) -> None:
+        """开始新采集时重置为跟随模式，且不把程序更新误判为用户选点。"""
+
+        self.view_mode.setCurrentText("跟随最新")
+        blockers = [
+            QtCore.QSignalBlocker(self.point_slider),
+            QtCore.QSignalBlocker(self.point_spin),
+        ]
+        try:
+            for widget in (self.point_slider, self.point_spin):
+                widget.setRange(1, total_points)
+                widget.setValue(1)
+        finally:
+            del blockers
+
+    @QtCore.Slot(str)
+    def _view_mode_changed(self, mode: str) -> None:
+        if mode == "跟随最新" and self._records:
+            self._select_point(max(self._records))
 
     def _set_raw_colormap(self, name: str) -> None:
         if name.casefold() in {"gray", "grey"}:

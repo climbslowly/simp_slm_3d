@@ -5,7 +5,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6 import QtWidgets
+import numpy as np
+from PySide6 import QtCore, QtWidgets
 
 from PySide6 import QtTest
 import pytest
@@ -248,5 +249,73 @@ def test_move_to_target_button_dispatches_objective_targets(tmp_path: Path) -> N
         window._start_move = capture_move  # type: ignore[method-assign]
         window.move_button.click()
         assert dispatched == [(targets, "objective")]
+    finally:
+        window.close(); app.processEvents()
+
+
+def test_new_scan_resets_to_follow_latest_and_displays_each_new_frame(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow(config_path=tmp_path / "configuration.json")
+    try:
+        plan = SpatialScanPlan.from_axis_list(
+            axis="Z",
+            values=[0.0, 0.001],
+            fixed_positions_mm={"X": 0.0, "Y": 0.0, "Z": 0.0},
+            save_root=tmp_path / "data",
+            roi_xywh=(0, 0, 2, 2),
+            settling_time_s=0.0,
+        )
+        window._plan = plan
+        window._metric_data = np.full((2,), np.nan)
+
+        # 模拟前一次采集留下了较大的 point_id；新计划重设控件不能被当成用户选点。
+        window.view_mode.setCurrentText("跟随最新")
+        for widget in (window.point_slider, window.point_spin):
+            blocker = QtCore.QSignalBlocker(widget)
+            widget.setRange(1, 5)
+            widget.setValue(5)
+            del blocker
+        window._reset_point_browser(plan.total_points)
+        assert window.view_mode.currentText() == "跟随最新"
+        assert window.point_slider.value() == window.point_spin.value() == 1
+
+        def record(point_id: int) -> dict[str, object]:
+            return {
+                "point_id": point_id,
+                "metric_value": float(point_id),
+                "roi_x": 0,
+                "roi_y": 0,
+                "roi_width": 2,
+                "roi_height": 2,
+                "target_x_mm": 0.0,
+                "target_y_mm": 0.0,
+                "target_z_mm": (point_id - 1) * 0.001,
+                "filename": f"point_{point_id}.tiff",
+            }
+
+        first = np.full((2, 2), 11, dtype=np.uint16)
+        second = np.full((2, 2), 22, dtype=np.uint16)
+        window._on_point_saved(record(1), first)
+        window._on_point_saved(record(2), second)
+
+        assert window._selected_point_id == 2
+        assert window.point_slider.value() == window.point_spin.value() == 2
+        assert np.array_equal(window.raw_item.image, second)
+
+        # 用户主动固定某点后保持该帧；切回跟随时立即跳到最新帧。
+        window._records.clear()
+        window._images.clear()
+        window._metric_data[:] = np.nan
+        window._reset_point_browser(plan.total_points)
+        window._on_point_saved(record(1), first)
+        window._user_select_point(1)
+        window._on_point_saved(record(2), second)
+        assert window.view_mode.currentText() == "固定选择"
+        assert window._selected_point_id == 1
+        assert np.array_equal(window.raw_item.image, first)
+
+        window.view_mode.setCurrentText("跟随最新")
+        assert window._selected_point_id == 2
+        assert np.array_equal(window.raw_item.image, second)
     finally:
         window.close(); app.processEvents()

@@ -49,6 +49,8 @@
   `0.001 mm` 小步返回开始位置，停止/故障时不自动复位。底部错误支持按钮复制。
 - 二维路径可通过 `plane_scan_path=SERPENTINE|Z_SHAPED` 配置，GUI 也有选择框；Z 形回跳
   不采图并拆成受单命令上限约束的子步。Z range 已验证只改变 Z、保持 X/Y 并回到起点。
+- 新采集计划会把原始图像浏览器重置为“跟随最新”，每个保存点自动显示最新帧；用户主动
+  选择 point_id/主图后才固定，切回“跟随最新”会立即跳到当前扫描最新帧。
 - REAL 命令完成判断加入梯形运动最短时间和 `20 ms` 余量，避免状态/规划位置过早到位时快速
   覆盖复位子步；复位后校验 XYZ。GUI 空闲每 `250 ms`、运动中约每 `100 ms` 更新规划位置。
 
@@ -141,7 +143,7 @@ REAL GUI 已接入 `camera_index` 选定的 Basler 相机；曝光由 GUI 写入
 在 GUI-M2 REAL 接入版本上，本机结果为：
 
 ```text
-72 passed
+73 passed
 compileall passed
 git diff --check passed（只有 Windows LF/CRLF 提示）
 ```
