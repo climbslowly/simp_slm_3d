@@ -1,0 +1,11 @@
+{
+  "algorithm_version": 1,
+  "operator_black_level_compensation_mode": "Sensor",
+  "operator_black_level": 0,
+  "settings_source": "operator report; not historical camera readback",
+  "radial_edges_nominal_um": [0, 50, 100, 150, 200, 250],
+  "aperture_radii_px": [9, 10, 11],
+  "neighbor_distance_ratios": [0.75, 1.25],
+  "comparison_atol": 1e-8,
+  "comparison_rtol": 1e-10
+}

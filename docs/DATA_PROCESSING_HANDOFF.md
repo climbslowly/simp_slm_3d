@@ -7,9 +7,19 @@
 后续操作者确认：两只物镜同规格EFL=7.7mm/NA=0.57、150mm套筒镜、1061nm；
 两片6.35mm玻璃内间距约24mm、空气模拟腔；仅扫描探测物镜Z。
 目标5000点、5µm间距、100µm中央孔。Gain更正为18.062dB（不是0），
-BlackLevel=0、Gamma=1、Binning两个方向均1/Sum。黑电平补偿仍未知。
+BlackLevel=0、Gamma=1、Binning两个方向均1/Sum。后来确认黑电平补偿为Sensor；
+这是操作者反馈，不能当作历史采集的节点回读记录。
 新增逐阱程序、参数来源、运行方法及边界见 [TWEEZER_ANALYSIS.md](TWEEZER_ANALYSIS.md)。
 原始文件不回写这些后补信息；逐阱Python/MATLAB已实际运行核对。
+
+新增暗场目录 `output/gui_m1/20260928_180538_974_gui_real_current_capture`：
+只有一帧、TIFF与MAT相同，但实际uint8、曝光1000µs；原扫描uint16、曝光1763µs。
+约94.75%的暗图像素为0，因此没有实施暗场扣除，也没有按16倍/曝光比例换算。
+复查入口 `analysis/review_tweezers.py` / `analysis/review_tweezers.m` 共用
+`analysis/review_parameters_20260928.json`，以旧逐阱结果及对应参考原图计算
+径向亮度、两个阵列方向的相邻间距及孔径敏感性；两种语言实际运行一致。
+结果及结论位于被忽略的 `output/review_20260928/REPORT.md`。这五个Z平面尚不足以
+定量识别逐阱轴向峰位、束腰或检验三维分布与目标数量之间的关系。
 
 已接收并处理 `output/gui_m1/20260928_135701_746_gui_real` 的五点 Z 扫描。
 Python 入口 `python -m analysis.offline_scan`，MATLAB 入口 `analysis/analyze_scan.m`；

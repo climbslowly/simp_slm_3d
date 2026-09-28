@@ -19,8 +19,8 @@
 | 扫描 | 仅探测物镜Z，其余光学元件与相机固定；移动位置不改变EFL |
 | 阵列 | 5000个，圆形区域中央挖直径100µm孔，设计间距5µm；未提供精确逐点目标坐标 |
 | 位深 | SensorBitDepth=Bpp12；操作者认为PixelFormat为Mono12，原文件无格式硬件读回 |
-| 相机 | Gain更正为18.062dB，BlackLevel=0，Gamma=1，水平/垂直Binning=1且Mode=Sum |
-| 仍未知 | 黑电平补偿、自动增益/自动曝光状态；暗场/平场；实测横向与轴向标定 |
+| 相机 | Gain更正为18.062dB，BlackLevel=0，补偿Sensor，Gamma=1，水平/垂直Binning=1且Mode=Sum |
+| 仍未知或缺少 | 自动增益/自动曝光状态；匹配设置的暗场/平场；实测横向与轴向标定（收到的暗场不匹配，见末节） |
 
 Basler官方确认此型号Gain单位为dB，采用模拟和数字增益组合。
 [Gain文档](https://docs.baslerweb.com/gain)
@@ -116,3 +116,56 @@ calibration五项：名义倍率、名义µm/px、设计间距对应px、参考�
 根据光斑尺度和粗扫结果制定加密Z采样。比较不同阵列时记录功率、SLM图案、
 目标坐标、间距、占据视场和算法设置，并区分固定总功率与固定单阱功率。
 真实结果只保存在被忽略的`output/tweezers_20260928/REPORT.md`。
+
+## 暗场与现有结论复查（2026-09-28 晚）
+
+操作者补充 `BslBlackLevelCompensationMode=Sensor`、BlackLevel=0。
+Sensor表示传感器内部进行黑电平补偿，不意味着背景和读出噪声为零。
+SensorBitDepth与输出PixelFormat是不同参数；Bpp12并不保证文件保存12位信息。
+官方说明：[Black Level](https://docs.baslerweb.com/black-level)、
+[Pixel Format](https://docs.baslerweb.com/pixel-format)。
+
+晚间暗场实际为uint8、曝光1000µs；原扫描uint16、曝光1763µs。
+TIFF与MAT均已核对，不能直接扣除、乘16或按曝光比例缩放后当作匹配暗场。
+单张暗场的空间标准差也不能解释为时间读出噪声。
+当前先继续用参考图的局部背景环，不要求立即补拍。
+
+Python和MATLAB复查程序分别读取各自已有的逐阱结果及参考原图。
+旧结果内嵌的参数保留当时未知值；新增Sensor信息保存在复查参数里，不篡改历史结果。
+复查内容包括：暗图统计、有效光点强度CV、径向分组、近邻边和不同积分孔径。
+CV统一为总体标准差/均值，Pearson相关只描述共同变化，不证明因果。
+方向间距按近邻中位数的0.75～1.25倍找无向边，每对只统计一次；按dx/dy主方向
+分成两组，适用于本次近轴向方格阵列，不能直接推广到任意旋转或无规则阵列。
+角度由相机x向右、y向下的图像坐标定义；长度µm仍为名义EFL换算。
+最近邻会偏向两条格距中较短的一条，所以不能只用最近邻中位数概括两个方向。
+径向分组按[左边界,右边界)，中心是全部候选质心平均；最内/最外分组少量点
+可能受尺度、孔边界和中心定义影响，不把它们当成中央孔漏光或严格环形照明模型。
+
+在仓库根目录运行（先有此前逐阱结果）：
+
+```powershell
+.\.venv\Scripts\python.exe -m analysis.review_tweezers output/tweezers_20260928/python output/gui_m1/20260928_180538_974_gui_real_current_capture --params analysis/review_parameters_20260928.json --output output/review_20260928/python
+```
+
+MATLAB：
+
+```matlab
+addpath('analysis');
+review_tweezers('output/tweezers_20260928/matlab', ...
+    'output/gui_m1/20260928_180538_974_gui_real_current_capture', ...
+    'analysis/review_parameters_20260928.json','output/review_20260928/matlab');
+```
+
+核对：
+
+```powershell
+.\.venv\Scripts\python.exe -m analysis.compare_review output/review_20260928/python output/review_20260928/matlab
+```
+
+输出 `review.mat`、`dark_audit.json`、`summary.csv`、`radial.csv`、`axes.csv`、
+`apertures.csv`。Python额外绘制`current_findings.png`。
+`review.mat`中的stats两行为参考光图/暗图，列为：H、W、每像素字节数、最小、最大、
+均值、总体标准差、零像素比例、曝光µs、TIFF/MAT相同标志。
+edges列为两个1基候选编号、dx/dy(px)、长度(px)、方向组1/2。
+所有数值与暗场判定均实际核对，atol=1e-8、rtol=1e-10。
+本次结论见本机 `output/review_20260928/REPORT.md`，真实数据和报告不提交Git。

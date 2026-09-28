@@ -46,7 +46,7 @@
     "binning_vertical": 1,
     "binning_horizontal_mode": "Sum",
     "binning_vertical_mode": "Sum",
-    "black_level_compensation_mode": null,
+    "black_level_compensation_mode": "Sensor",
     "gain_auto": null,
     "exposure_auto": null
   },
