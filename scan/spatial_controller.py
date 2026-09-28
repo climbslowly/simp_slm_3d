@@ -83,7 +83,9 @@ class SpatialScanController:
         if not self.camera.is_connected:
             errors.append("相机未连接")
         errors.extend(plan.boundary_errors())
-        plan_errors = getattr(self.stage, "plan_errors", None)
+        plan_errors = getattr(self.stage, "scan_plan_errors", None)
+        if plan_errors is None:
+            plan_errors = getattr(self.stage, "plan_errors", None)
         if plan_errors is not None:
             errors.extend(plan_errors(plan.points))
         x, y, width, height = plan.roi_xywh
@@ -104,6 +106,49 @@ class SpatialScanController:
 
     def _wait_for_motion(self, point: SpatialPoint, timeout_s: float) -> dict[str, float]:
         self._wait_until_idle(timeout_s, operation=f"point_id={point.point_id} 移动")
+        return self.stage.get_positions()
+
+    def _move_to_scan_point(
+        self, point: SpatialPoint, timeout_s: float
+    ) -> dict[str, float]:
+        """必要时拆分行间回跳；每条真实命令仍受 Adapter 单步门限制。"""
+
+        current = self.stage.get_positions()
+        step_limit = getattr(self.stage, "scan_command_step_mm", None)
+        if step_limit is None:
+            step_count = 1
+        else:
+            step_limit = float(step_limit)
+            if not math.isfinite(step_limit) or step_limit <= 0:
+                raise ValueError("scan_command_step_mm 必须是有限正数")
+            step_count = max(
+                1,
+                math.ceil(
+                    max(
+                        abs(float(point.targets_mm[axis]) - float(current[axis]))
+                        for axis in ("X", "Y", "Z")
+                    )
+                    / step_limit
+                ),
+            )
+        for substep in range(1, step_count + 1):
+            if self._stop.is_set():
+                raise InterruptedError(f"point_id={point.point_id} 移动前收到停止请求")
+            fraction = substep / step_count
+            target = {
+                axis: (
+                    float(current[axis])
+                    + (float(point.targets_mm[axis]) - float(current[axis])) * fraction
+                )
+                for axis in ("X", "Y", "Z")
+            }
+            self._set_state(ScanState.MOVING)
+            self.stage.move_absolute(target)
+            self._set_state(ScanState.WAITING_FOR_POSITION)
+            self._wait_until_idle(
+                timeout_s,
+                operation=f"point_id={point.point_id} 子步 {substep}/{step_count}",
+            )
         return self.stage.get_positions()
 
     def _wait_until_idle(self, timeout_s: float, *, operation: str) -> None:
@@ -184,10 +229,7 @@ class SpatialScanController:
                 current_point = point
                 if not self._pause_before_next_point():
                     break
-                self._set_state(ScanState.MOVING)
-                self.stage.move_absolute(point.targets_mm)
-                self._set_state(ScanState.WAITING_FOR_POSITION)
-                actual = self._wait_for_motion(point, plan.motion_timeout_s)
+                actual = self._move_to_scan_point(point, plan.motion_timeout_s)
                 if self.callbacks.on_position:
                     self.callbacks.on_position(actual)
                 if self._stop.is_set():

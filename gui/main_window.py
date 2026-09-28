@@ -38,6 +38,10 @@ CAMERA_AXIS_TEXT = {
     "X": "X（物理+Y / 轴1+）",
     "Y": "Y（物理+Z / 轴2-）",
 }
+PLANE_PATH_LABEL_TO_MODE = {
+    "蛇形（逐行往返）": "SERPENTINE",
+    "Z形（每行同向）": "Z_SHAPED",
+}
 
 
 class Bridge(QtCore.QObject):
@@ -308,6 +312,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scan_type.addItems(["XY", "XZ", "YZ", "X range", "Y range", "Z range", "X list", "Y list", "Z list"])
         self.scan_type.setCurrentText(str(self.config["scan_type"]))
         form.addRow("扫描类型", self.scan_type)
+        self.plane_scan_path = QtWidgets.QComboBox()
+        self.plane_scan_path.addItems(PLANE_PATH_LABEL_TO_MODE)
+        configured_path = str(self.config["plane_scan_path"])
+        self.plane_scan_path.setCurrentText(
+            next(
+                label
+                for label, mode in PLANE_PATH_LABEL_TO_MODE.items()
+                if mode == configured_path
+            )
+        )
+        form.addRow("二维扫描路径", self.plane_scan_path)
         self.axis1_label = QtWidgets.QLabel("X 相对起/止/步长")
         self.axis1 = [spin(float(self.config[key])) for key in ("horizontal_start", "horizontal_stop", "horizontal_step")]
         row1 = QtWidgets.QHBoxLayout(); [row1.addWidget(item) for item in self.axis1]
@@ -355,7 +370,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plan_summary = QtWidgets.QLabel()
         self.plan_summary.setWordWrap(True)
         form.addRow("扫描前估算", self.plan_summary)
-        self.scan_inputs = [self.scan_type, *self.axis1, *self.axis2, self.list_values, self.fixed, self.settling, self.metric_combo, *self.roi_spins, self.output_edit, self.exposure]
+        self.scan_inputs = [self.scan_type, self.plane_scan_path, *self.axis1, *self.axis2, self.list_values, self.fixed, self.settling, self.metric_combo, *self.roi_spins, self.output_edit, self.exposure]
         self.left_layout.addWidget(box)
 
     def _build_actions(self) -> None:
@@ -469,6 +484,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             axis = kind[0]; self.axis1_label.setText(f"{OBJECTIVE_AXIS_TEXT[axis]} 相对起/止/步长"); self.axis2_label.setText("第二扫描轴（单轴不使用）")
         for widget in self.axis2: widget.setEnabled(plane)
+        self.plane_scan_path.setEnabled(plane)
         for widget in self.axis1: widget.setVisible(not is_list)
         self.axis1_label.setVisible(not is_list)
         self.list_values.setVisible(is_list); self.list_label.setVisible(is_list)
@@ -486,10 +502,13 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         kind = self.scan_type.currentText()
         if kind in PLANE_AXES:
+            path_mode = PLANE_PATH_LABEL_TO_MODE[self.plane_scan_path.currentText()]
             return SpatialScanPlan.from_plane(
                 plane=kind, horizontal_start=self.axis1[0].value(), horizontal_stop=self.axis1[1].value(), horizontal_step=self.axis1[2].value(),
                 vertical_start=self.axis2[0].value(), vertical_stop=self.axis2[1].value(), vertical_step=self.axis2[2].value(), fixed_value_mm=self.fixed.value(),
-                relative_origin_mm=origin, serpentine=True, **common,
+                relative_origin_mm=origin,
+                serpentine=path_mode == "SERPENTINE",
+                **common,
             )
         axis = kind[0]
         if kind.endswith("list"):
@@ -515,7 +534,11 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 suffix = "；软件边界未配置" if plan.objective_bounds_mm is None else "；已通过软件边界检查"
                 self.plan_summary.setStyleSheet("color:#a85d00" if plan.objective_bounds_mm is None else "")
-                self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；坐标相对于当前扫描起点；完成后按 0.001 mm 小步返回；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（TIFF 与逐帧 MAT 各保存一份原图）{suffix}")
+                path_text = (
+                    f"；二维路径={plan.plane_path_mode}"
+                    if plan.is_plane else ""
+                )
+                self.plan_summary.setText(f"{plan.total_points} 点 / {plan.total_points} 幅原图；坐标相对于当前扫描起点{path_text}；完成后按 0.001 mm 小步返回；未压缩像素约 {raw_bytes / 1024**2:.2f} MiB（TIFF 与逐帧 MAT 各保存一份原图）{suffix}")
                 self.start_button.setEnabled(self._thread is None)
         except Exception as exc:
             self.plan_summary.setStyleSheet("color:#d9534f;font-weight:700")
@@ -811,7 +834,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return {
             "schema_version": 1, "device_mode": "MOCK", "exposure_ms": self.exposure.value(), "manual_step_mm": self.manual_step.value(),
             "camera_manual_step_mm": self.camera_manual_step.value(),
-            "scan_type": self.scan_type.currentText(), "horizontal_start": self.axis1[0].value(), "horizontal_stop": self.axis1[1].value(), "horizontal_step": self.axis1[2].value(),
+            "scan_type": self.scan_type.currentText(), "plane_scan_path": PLANE_PATH_LABEL_TO_MODE[self.plane_scan_path.currentText()],
+            "horizontal_start": self.axis1[0].value(), "horizontal_stop": self.axis1[1].value(), "horizontal_step": self.axis1[2].value(),
             "vertical_start": self.axis2[0].value(), "vertical_stop": self.axis2[1].value(), "vertical_step": self.axis2[2].value(), "fixed_value_mm": self.fixed.value(),
             "settling_ms": self.settling.value(), "roi_xywh": [item.value() for item in self.roi_spins], "metric": self.metric_combo.currentText(),
             "output_dir": self.output_edit.text(), "colormap": self.raw_colormap.currentText(),

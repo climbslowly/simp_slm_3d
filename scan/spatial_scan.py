@@ -63,6 +63,7 @@ class SpatialScanPlan:
     vertical_values: list[float] = field(default_factory=list)
     fixed_axis: str | None = None
     fixed_value_mm: float | None = None
+    plane_path_mode: str | None = None
     objective_bounds_mm: dict[str, list[float]] | None = None
     coordinate_mode: str = "ABSOLUTE"
     origin_positions_mm: dict[str, float] | None = None
@@ -85,6 +86,8 @@ class SpatialScanPlan:
             raise ValueError("指标只能是 mean 或 sum")
         if self.coordinate_mode not in {"ABSOLUTE", "RELATIVE_TO_SCAN_START"}:
             raise ValueError("coordinate_mode 必须是 ABSOLUTE 或 RELATIVE_TO_SCAN_START")
+        if self.plane_path_mode not in {None, "SERPENTINE", "Z_SHAPED"}:
+            raise ValueError("plane_path_mode 必须是 SERPENTINE、Z_SHAPED 或 null")
         if self.origin_positions_mm is not None:
             if set(self.origin_positions_mm) != set(AXES):
                 raise ValueError("扫描起始位置必须完整包含 X/Y/Z")
@@ -211,6 +214,7 @@ class SpatialScanPlan:
             vertical_values=vertical,
             fixed_axis=fixed_axis,
             fixed_value_mm=float(fixed_value_mm),
+            plane_path_mode="SERPENTINE" if serpentine else "Z_SHAPED",
             coordinate_mode=(
                 "RELATIVE_TO_SCAN_START" if origin is not None else "ABSOLUTE"
             ),

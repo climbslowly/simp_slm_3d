@@ -176,3 +176,47 @@ def test_relative_serpentine_scan_has_no_large_first_or_row_transition_step(
     )
     assert stage.plan_errors(plan.points) == []
     assert plan.points[0].targets_mm["Z"] == pytest.approx(origin["Z"])
+
+
+def test_relative_z_range_is_motion_ready_on_real_axis_mapping(tmp_path: Path) -> None:
+    stage, _fake = connected_stage(tmp_path)
+    origin = stage.get_positions()
+    plan = SpatialScanPlan.from_axis_range(
+        axis="Z",
+        start=-0.1,
+        stop=0.1,
+        step=0.05,
+        fixed_positions_mm=origin,
+        relative_origin_mm=origin,
+        save_root=tmp_path,
+        roi_xywh=(0, 0, 1, 1),
+    )
+    assert stage.plan_errors(plan.points) == []
+    assert stage.scan_plan_errors(plan.points) == []
+    assert [point.targets_mm["Z"] for point in plan.points] == pytest.approx(
+        [origin["Z"] - 0.1, origin["Z"] - 0.05, origin["Z"], origin["Z"] + 0.05, origin["Z"] + 0.1]
+    )
+    assert all(point.targets_mm["X"] == origin["X"] for point in plan.points)
+    assert all(point.targets_mm["Y"] == origin["Y"] for point in plan.points)
+
+
+def test_z_shaped_flyback_is_allowed_for_controller_subdivision(tmp_path: Path) -> None:
+    stage, _fake = connected_stage(tmp_path)
+    origin = stage.get_positions()
+    plan = SpatialScanPlan.from_plane(
+        plane="XY",
+        horizontal_start=-0.1,
+        horizontal_stop=0.1,
+        horizontal_step=0.1,
+        vertical_start=0,
+        vertical_stop=0.1,
+        vertical_step=0.1,
+        fixed_value_mm=0,
+        relative_origin_mm=origin,
+        serpentine=False,
+        save_root=tmp_path,
+        roi_xywh=(0, 0, 1, 1),
+    )
+    assert any("0.200000 mm" in error for error in stage.plan_errors(plan.points))
+    assert stage.scan_plan_errors(plan.points) == []
+    assert stage.scan_command_step_mm == 0.1

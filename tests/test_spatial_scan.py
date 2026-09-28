@@ -51,6 +51,7 @@ def test_relative_serpentine_plane_uses_scan_start_as_origin(tmp_path) -> None:
         **common(tmp_path),
     )
     assert plan.coordinate_mode == "RELATIVE_TO_SCAN_START"
+    assert plan.plane_path_mode == "SERPENTINE"
     assert plan.origin_positions_mm == origin
     assert plan.points[0].targets_mm == pytest.approx(
         {"X": 3.5806, "Y": -3.3516, "Z": 1.6478}
@@ -64,6 +65,25 @@ def test_relative_serpentine_plane_uses_scan_start_as_origin(tmp_path) -> None:
             abs(current.targets_mm[axis] - previous.targets_mm[axis])
             for axis in ("X", "Y", "Z")
         ) <= 0.05 + 1e-12
+
+
+def test_z_shaped_plane_restarts_each_row_from_first_column(tmp_path) -> None:
+    plan = SpatialScanPlan.from_plane(
+        plane="XY",
+        horizontal_start=-0.1,
+        horizontal_stop=0.1,
+        horizontal_step=0.1,
+        vertical_start=0,
+        vertical_stop=0.1,
+        vertical_step=0.1,
+        fixed_value_mm=0,
+        serpentine=False,
+        **common(tmp_path),
+    )
+    assert plan.plane_path_mode == "Z_SHAPED"
+    assert [(point.row, point.col) for point in plan.points] == [
+        (0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)
+    ]
 
 
 def test_range_endpoint_rule_and_invalid_values() -> None:

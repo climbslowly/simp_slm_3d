@@ -344,6 +344,32 @@ class GasFiveAxisStage:
             result[logical_axis] = [calibration.effective_min_mm, calibration.effective_max_mm]
         return result
 
+    @property
+    def scan_command_step_mm(self) -> float:
+        """扫描控制器拆分长过渡时采用的最小逐轴单命令上限。"""
+
+        values = [
+            self._max_steps[axis_id]
+            for axis_id in self.AXIS_MAPPING["objective"].values()
+        ]
+        assert all(value is not None for value in values)
+        return min(float(value) for value in values if value is not None)
+
+    def scan_plan_errors(self, points: Iterable[object]) -> list[str]:
+        """扫描过渡可拆成安全子步；预检这里只验证每个采集目标的范围。"""
+
+        errors: list[str] = []
+        for index, point in enumerate(points, start=1):
+            targets = getattr(point, "targets_mm")
+            for logical_axis, axis_id in self.AXIS_MAPPING["objective"].items():
+                errors.extend(
+                    f"point {index} / {logical_axis}: {reason}"
+                    for reason in self._calibrations[axis_id].target_errors(
+                        float(targets[logical_axis])
+                    )
+                )
+        return errors
+
     def plan_errors(self, points: Iterable[object]) -> list[str]:
         previous = self.get_positions()
         errors: list[str] = []

@@ -73,6 +73,21 @@ def test_boundary_configuration_is_validated_and_preserved(tmp_path: Path) -> No
     assert config["objective_scan_bounds_mm"]["Z"] == [-3.0, 3.0]
 
 
+def test_plane_scan_path_configuration_is_validated(tmp_path: Path) -> None:
+    path = tmp_path / "configuration.json"
+    payload = dict(DEFAULT_CONFIG)
+    payload["plane_scan_path"] = "Z_SHAPED"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    config, error = load_config(path)
+    assert error is None
+    assert config["plane_scan_path"] == "Z_SHAPED"
+
+    payload["plane_scan_path"] = "DIAGONAL"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    config, error = load_config(path)
+    assert error and config["plane_scan_path"] == "SERPENTINE"
+
+
 def test_gui_disables_start_when_plan_exceeds_configured_boundary(tmp_path: Path) -> None:
     path = tmp_path / "configuration.json"
     payload = dict(DEFAULT_CONFIG)
@@ -137,9 +152,44 @@ def test_gui_builds_relative_serpentine_plan_and_copies_errors(tmp_path: Path) -
         assert plan.return_to_start and plan.return_step_mm == 0.001
         assert not window.controller.preflight(plan, image_shape=camera.image_shape)
 
+        window.plane_scan_path.setCurrentText("Z形（每行同向）")
+        z_shaped = window._plan_from_controls()
+        assert z_shaped.plane_path_mode == "Z_SHAPED"
+        assert [point.col for point in z_shaped.points[5:10]] == [0, 1, 2, 3, 4]
+
         window._on_failed("可复制的测试错误")
         window.copy_error_button.click()
         assert app.clipboard().text() == "可复制的测试错误"
+    finally:
+        window.close(); app.processEvents()
+
+
+def test_gui_z_range_is_relative_and_keeps_xy_fixed(tmp_path: Path) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stage = MockXYZStage(speed_mm_s=1000.0)
+    stage.connect()
+    stage.move_absolute({"X": 3.6806, "Y": -3.2516, "Z": 1.6478})
+    while stage.is_moving():
+        time.sleep(0.001)
+    camera = MockCamera(shape=(32, 40))
+    camera.connect()
+    window = MainWindow(
+        config_path=tmp_path / "configuration.json",
+        stage=stage,
+        camera=camera,
+        device_mode="REAL",
+    )
+    try:
+        window.scan_type.setCurrentText("Z range")
+        for widget, value in zip(window.axis1, (-0.1, 0.1, 0.05)):
+            widget.setValue(value)
+        plan = window._plan_from_controls()
+        assert plan.plane_path_mode is None
+        assert [point.targets_mm["Z"] for point in plan.points] == pytest.approx(
+            [1.5478, 1.5978, 1.6478, 1.6978, 1.7478]
+        )
+        assert {point.targets_mm["X"] for point in plan.points} == {3.6806}
+        assert {point.targets_mm["Y"] for point in plan.points} == {-3.2516}
     finally:
         window.close(); app.processEvents()
 

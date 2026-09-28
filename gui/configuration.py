@@ -16,6 +16,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "manual_step_mm": 0.1,
     "camera_manual_step_mm": 0.1,
     "scan_type": "XY",
+    "plane_scan_path": "SERPENTINE",
     "horizontal_start": -0.4,
     "horizontal_stop": 0.4,
     "horizontal_step": 0.2,
@@ -62,6 +63,10 @@ def load_config(path: Path) -> tuple[dict[str, object], str | None]:
             raise ValueError("GUI-M1 只允许 MOCK device_mode")
         merged = dict(DEFAULT_CONFIG)
         merged.update(loaded)
+        plane_scan_path = str(merged.get("plane_scan_path", "")).upper()
+        if plane_scan_path not in {"SERPENTINE", "Z_SHAPED"}:
+            raise ValueError("plane_scan_path 必须是 SERPENTINE 或 Z_SHAPED")
+        merged["plane_scan_path"] = plane_scan_path
         merged["objective_scan_bounds_mm"] = normalize_objective_bounds(
             merged.get("objective_scan_bounds_mm")
         )

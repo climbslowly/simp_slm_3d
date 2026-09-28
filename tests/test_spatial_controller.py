@@ -82,15 +82,17 @@ def test_complete_5_by_3_scan_save_reload_and_metric(tmp_path) -> None:
     assert np.array_equal(frame_mat["image"], tifffile.imread(session_dir / rows[0]["filename"]))
 
 
-def test_completed_scan_returns_to_start_in_small_steps(tmp_path) -> None:
+def test_completed_relative_z_range_keeps_xy_and_returns_to_start(tmp_path) -> None:
     stage, camera = make_devices()
     stage.move_absolute({"X": 1.0, "Y": -2.0, "Z": 3.0})
     while stage.is_moving():
         time.sleep(0.001)
     start = stage.get_positions()
-    plan = SpatialScanPlan.from_axis_list(
-        axis="X",
-        values=[0.05, 0.1],
+    plan = SpatialScanPlan.from_axis_range(
+        axis="Z",
+        start=-0.1,
+        stop=0.1,
+        step=0.05,
         fixed_positions_mm=start,
         relative_origin_mm=start,
         return_to_start=True,
@@ -102,6 +104,49 @@ def test_completed_scan_returns_to_start_in_small_steps(tmp_path) -> None:
     directory = SpatialScanController(stage, camera).run(plan)
     assert directory is not None
     assert stage.get_positions() == pytest.approx(start)
+    with (directory / "scan_log.csv").open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [float(row["target_z_mm"]) for row in rows] == pytest.approx(
+        [2.9, 2.95, 3.0, 3.05, 3.1]
+    )
+    assert {float(row["target_x_mm"]) for row in rows} == {1.0}
+    assert {float(row["target_y_mm"]) for row in rows} == {-2.0}
+
+
+def test_z_shaped_row_flyback_is_split_into_safe_scan_commands(tmp_path) -> None:
+    stage, camera = make_devices()
+    stage.scan_command_step_mm = 0.1
+    commanded: list[dict[str, float]] = []
+    original_move = stage.move_absolute
+
+    def record_move(targets: dict[str, float]) -> None:
+        commanded.append(dict(targets))
+        original_move(targets)
+
+    stage.move_absolute = record_move
+    plan = SpatialScanPlan.from_plane(
+        plane="XY",
+        horizontal_start=-0.1,
+        horizontal_stop=0.1,
+        horizontal_step=0.1,
+        vertical_start=0.0,
+        vertical_stop=0.1,
+        vertical_step=0.1,
+        fixed_value_mm=0.0,
+        relative_origin_mm=stage.get_positions(),
+        serpentine=False,
+        save_root=tmp_path,
+        settling_time_s=0,
+        roi_xywh=(5, 4, 20, 16),
+    )
+    directory = SpatialScanController(stage, camera).run(plan)
+    assert directory is not None
+    assert plan.plane_path_mode == "Z_SHAPED"
+    assert len(commanded) > plan.total_points
+    previous = {"X": 0.0, "Y": 0.0, "Z": 0.0}
+    for target in commanded:
+        assert max(abs(target[axis] - previous[axis]) for axis in ("X", "Y", "Z")) <= 0.1 + 1e-12
+        previous = target
 
 
 def _stop_in_state(tmp_path, wanted: ScanState, *, speed=1000.0, settling=0.0, capture_delay=0.0):
