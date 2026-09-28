@@ -55,7 +55,8 @@ for i = 1:n
     previews{i} = makePreview(im,p.preview_stride);
 end
 if ~isfolder(outputDir), mkdir(outputDir); end
-parameters_json = jsonencode(p); source = scanDir;
+% 保留原始 JSON 中 null 与 [] 的区别（MATLAB jsondecode 都可能读为空数组）。
+parameters_json = fileread(parameterFile); source = scanDir;
 % cellstr 用于与 scipy loadmat 的字符串单元数组一致。
 status = cellstr(status);
 save(fullfile(outputDir,'results.mat'),'data','radial','x_profile','y_profile','columns','status','parameters_json','source','-v7');

@@ -4,6 +4,13 @@
 
 ## 当前离线实现（2026-09-28 补充）
 
+后续操作者确认：两只物镜同规格EFL=7.7mm/NA=0.57、150mm套筒镜、1061nm；
+两片6.35mm玻璃内间距约24mm、空气模拟腔；仅扫描探测物镜Z。
+目标5000点、5µm间距、100µm中央孔。Gain更正为18.062dB（不是0），
+BlackLevel=0、Gamma=1、Binning两个方向均1/Sum。黑电平补偿仍未知。
+新增逐阱程序、参数来源、运行方法及边界见 [TWEEZER_ANALYSIS.md](TWEEZER_ANALYSIS.md)。
+原始文件不回写这些后补信息；逐阱Python/MATLAB已实际运行核对。
+
 已接收并处理 `output/gui_m1/20260928_135701_746_gui_real` 的五点 Z 扫描。
 Python 入口 `python -m analysis.offline_scan`，MATLAB 入口 `analysis/analyze_scan.m`；
 共用参数、位置—照片总览、滑条浏览器、背景/强度/质心/宽度/梯度及径向剖面已完成。

@@ -1,5 +1,8 @@
 # 离线单轴扫描分析：Python / MATLAB
 
+补充光镊系统参数后的逐阱检测与离散Z分析见 [TWEEZER_ANALYSIS.md](TWEEZER_ANALYSIS.md)。
+其中使用更正后的Gain=18.062dB和名义成像倍率；下文保留第一阶段整体检查的说明。
+
 本入口只读磁盘文件，不连接硬件。二维硬件测试继续暂缓。本版处理 GUI schema 1 的
 `AXIS_RANGE` / `AXIS_LIST`，明确拒绝二维数据；不能把单轴测试外推成二维已验收。
 
